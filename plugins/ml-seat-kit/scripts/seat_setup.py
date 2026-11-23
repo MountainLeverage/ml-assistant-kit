@@ -51,6 +51,24 @@ DENY = [   # second layer behind the send gate: the known connector send tools, 
     "mcp__claude_ai_Google_Calendar__delete_event",
 ]
 FIRST_PROMPT = "Start my assistant: run the seat-start skill."
+# The send gate lives in the seat's own settings, not the plugin's hooks.json: only here can the hook name the absolute
+# Python the launcher found, so a session started without the launcher (no Python on PATH) still runs it. Exec form
+# (command + args) has no shell, so cmd, PowerShell and Git Bash all see the same argv, spaces included. onFailure
+# "block": if that Python is gone, the tool call is blocked, not let through. Only seat sessions carry this hook.
+GATE_MATCHER = ("mcp__.*([Ss]end|SEND|[Rr]eply|REPLY|[Ff]orward|FORWARD|[Rr]espond|RESPOND|[Rr]svp|RSVP|[Ee]vent|EVENT"
+                "|[Ii]nvit|INVIT|[Mm]eeting|MEETING|[Aa]ppointment|APPOINTMENT).*")
+
+
+def gate_hook(python, kit_home):
+    script = pathlib.Path(kit_home).resolve() / "current" / "plugins" / PLUGIN / "scripts" / "send_gate.py"
+    return {"matcher": GATE_MATCHER, "hooks": [{"type": "command", "command": os.path.abspath(python),
+                                                "args": ["-I", str(script)], "timeout": 30, "onFailure": "block"}]}
+
+
+def _is_gate(entry):
+    return isinstance(entry, dict) and any(
+        isinstance(h, dict) and isinstance(h.get("args"), list) and any(str(a).endswith("send_gate.py") for a in h["args"])
+        for h in (entry.get("hooks") if isinstance(entry.get("hooks"), list) else []))
 
 
 class Stop(Exception):
@@ -228,22 +246,28 @@ def write_claude_md(seat, cfg, refresh):
     return "kept"
 
 
-def write_settings(seat):
-    """The seat's project settings: deny rules only. Adds missing deny entries; never removes or allows anything."""
+def write_settings(seat, gate):
+    """The seat's project settings: deny rules and the one send gate hook. Adds missing deny entries and replaces only
+    the kit's own gate entry; never removes her entries or allows anything. A file it cannot read stops setup: a seat
+    without its gate must not open."""
     path = seat / ".claude" / "settings.json"
     path.parent.mkdir(exist_ok=True)
     try:
         data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-    except ValueError:
-        return "left alone (not readable JSON; the send gate still applies)"
-    if not isinstance(data, dict):
-        return "left alone (unexpected shape)"
-    perms = data.setdefault("permissions", {})
-    deny = perms.setdefault("deny", [])
+        perms = data.setdefault("permissions", {})
+        deny = perms.setdefault("deny", [])
+        pre = data.setdefault("hooks", {}).setdefault("PreToolUse", [])
+        if not isinstance(deny, list) or not isinstance(pre, list):
+            raise TypeError
+    except (ValueError, TypeError, AttributeError):
+        raise Stop(5, "the settings file in your assistant's folder (.claude\\settings.json) is not in a shape the kit "
+                      "can read, so the send gate could not be put in place", "send this line to whoever set up your assistant")
     added = [d for d in DENY if d not in deny]
-    if not added and path.exists():
+    hooks = [e for e in pre if not _is_gate(e)] + [gate]
+    if not added and hooks == pre and path.exists():
         return "kept"
     deny.extend(added)
+    pre[:] = hooks
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8", newline="\n")
     return "written"
 
@@ -362,7 +386,7 @@ def setup_seat(args):
     seat_common.save_config(seat, cfg)                 # the marker: from here on this folder is a seat
     made = seed_state(seat)
     claude_md = write_claude_md(seat, cfg, refresh)
-    settings = write_settings(seat)
+    settings = write_settings(seat, gate_hook(sys.executable, args.kit_home))
     notes = []
     if cfg.get("tests_passed_for") != kit_version() and not args.no_tests:
         ok, tail = run_self_tests()

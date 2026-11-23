@@ -3,6 +3,9 @@
 Run this on a Windows PC with a person signed in to Claude. Everything else in the kit was tested without a
 sign-in; these are the things only a real start can show. Do the first three first: they are untested.
 
+The kit address in `Assistant.cmd` and `Assistant.ps1` must be the published one. A launcher that still says
+PUT-KIT-ZIP-ADDRESS-HERE is a stale build and must not be sent.
+
 ## Untested, check these first
 
 1. **Which copy a session uses after an update.** Start once. Then hand out a kit zip with a higher version
@@ -13,6 +16,7 @@ sign-in; these are the things only a real start can show. Do the first three fir
    a test email to yourself. The send must be refused with a line that starts "Drafts only:". Then open
    `.seat\logs\send_gate.log` in the seat folder: a DENY line there proves the hook itself ran. If the send is
    refused but there is no DENY line, only the settings deny rule caught it and the hook did not start.
+   If EVERY tool is refused with can't open file, stop and send that text.
 3. **SmartScreen on the kept copy.** Start the assistant a second and third time from the desktop shortcut. Note
    whether "Windows protected your PC" appears on every start, only on the first, or never.
 
@@ -20,7 +24,8 @@ sign-in; these are the things only a real start can show. Do the first three fir
 
 4. Run `Assistant.cmd` from where it was downloaded. Note any SmartScreen or security tool prompt, and whether
    it could be clicked through.
-5. All six step lines print, each ending in found, installed or done.
+5. All six step lines print. Steps 1 to 5 end in found (with which Claude Code it found), installed, done, or
+   "done (...)"; step 6's line ends in "...".
 6. The session opens in the seat folder and the first reply states the hard limits in plain words.
 7. Connect Gmail, Google Calendar and Google Drive when shown where. The assistant then reads mail and calendar.
 8. Ask for a draft reply to a real email. A draft appears in Gmail; nothing is sent.

@@ -6,7 +6,8 @@ so this file passes its own scan. make_kit.py runs the same scan over every file
 Two lists. The GENERIC one below (paths from one PC, addresses, an internal host shape) ships with the kit. The
 PRIVATE one (the names of real people, seats and the company) must not be published, because a list of the names
 to keep out is itself those names. It lives in tests/private_words.txt, one "label<TAB>regular expression" per
-line, only in the kit's private home. make_kit.py never puts that file in a zip, and a public copy runs without it.
+line, only on the machine that cuts releases (git ignores it). make_kit.py never puts that file in a zip, refuses
+a release build when it is missing, and a public copy of the tests runs without it.
 """
 import pathlib
 import re

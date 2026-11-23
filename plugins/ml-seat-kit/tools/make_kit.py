@@ -64,9 +64,27 @@ def stamp(data, source):
     return data.replace(PLACEHOLDER, source.encode("utf-8"))
 
 
-def build(out, source=None):
+NO_PRIVATE_LIST = " ".join((
+    "REFUSED: this is a release build (--source is set) and the private name list is missing",
+    "(tests/private_words.txt). Without it the zip is only checked for generic things (paths,",
+    "addresses), not for the names of real people, seats or the company.",
+    "Put the list in place and run again. Only if you have checked the kit for names by hand,",
+    "run again with --without-private-list."))
+
+
+def require_private_list(words, source, without=False):
+    """A release build (one with a download address) needs the private name list, unless the person
+    cutting it says, in so many words, that they are going without. Never a silent skip."""
+    if source and not words and not without:
+        raise SystemExit(NO_PRIVATE_LIST)
+    if source and not words:
+        print("WARNING: release build WITHOUT the private name list; names were not scanned for.")
+
+
+def build(out, source=None, without_private_list=False):
     sys.path.insert(0, str(PLUGIN / "tests"))
     import test_privacy   # noqa: E402  (the same scan the tests run)
+    require_private_list(test_privacy.private_words(), source, without_private_list)
     version = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))["version"]
     entries = {".claude-plugin/marketplace.json": (json.dumps(marketplace(version), indent=2) + "\n").encode("utf-8")}
     for p in plugin_files():
@@ -94,8 +112,10 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="make_kit.py")
     ap.add_argument("--out", required=True)
     ap.add_argument("--source", default=None, help="the https address the zip will be served from")
+    ap.add_argument("--without-private-list", action="store_true",
+                    help="cut a release with no private name list present (you checked for names by hand)")
     args = ap.parse_args(argv)
-    version, n = build(args.out, args.source)
+    version, n = build(args.out, args.source, args.without_private_list)
     print("kit %s: %d files -> %s" % (version, n, args.out))
     return 0
 

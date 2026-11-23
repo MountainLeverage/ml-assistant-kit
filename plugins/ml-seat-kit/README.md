@@ -19,10 +19,10 @@ that lists it, the same plugin installs with:
 
 | File | What it does |
 |---|---|
-| `launcher/Assistant.cmd` | The one file the person gets. Six steps, each one plain line: Claude Code, Python, the kit, the plugin, the seat folder, open. Running it again is how they start each day. |
+| `launcher/Assistant.cmd` | The one file the person gets. Six steps, each one plain line: Claude Code, Python, the kit, the plugin, the seat folder, open. Running it again is how they start each day. Step 1 uses a Claude Code that is already there (the native `%USERPROFILE%\.local\bin\claude.exe`, then npm's `%APPDATA%\npm\claude.cmd`, then `where claude`) and downloads one only when none is found. |
 | `launcher/Assistant.ps1` | The same six steps and lines, for pasting into PowerShell when a downloaded `.cmd` is blocked. |
 | `scripts/seat_setup.py` | Steps 4 and 5: registers the kit folder as a local marketplace, installs or updates the plugin, makes or checks the seat folder, asks three optional questions on the first run, runs the self tests (once per kit version) and a dry loop check, makes one desktop shortcut. |
-| `scripts/send_gate.py` + `hooks/hooks.json` | The send gate. A PreToolUse hook on every MCP tool named with send, reply, forward, respond or RSVP. Inside a seat folder it denies (exit 2, plain reason); outside one it does nothing. Fails closed inside a seat. |
+| `scripts/send_gate.py` | The send gate. A PreToolUse hook on every MCP tool named with send, reply, forward, respond or RSVP. Inside a seat folder it denies (exit 2, plain reason); outside one it does nothing. Fails closed inside a seat. Since 0.1.1 it is wired in the seat's `.claude/settings.json` (by `seat_setup.py`), not in `hooks/hooks.json` (now empty): exec form with the absolute Python the launcher found, so it runs in a session started without the launcher, and `onFailure: "block"` (Claude Code 2.1.295 or later) so a vanished Python blocks the call. |
 | `scripts/tick.py` | The loop: `check` (one loop per seat), `begin` (STOP, the search epoch, due promises, backup due), `end`, `sleep` (the background sleeper; refuses a second arm). |
 | `scripts/wakes.py` | Promises for later: one dated row each, fired by the sleeper, closed with a line. |
 | `scripts/ledger.py` | One line per thread in `state/ledger.jsonl`. |
@@ -40,8 +40,8 @@ that lists it, the same plugin installs with:
 - Kit: `%LOCALAPPDATA%\seat-kit\current` (the expanded zip, registered as the local marketplace `seat-kit`),
   plus `python.txt` (the interpreter the launcher found), `last-seat.txt` and a copy of the launcher.
 - Seat: `%USERPROFILE%\Assistant\<assistant name>`: `.seat/seat.json` (the marker; names, backup folder, label
-  ids), `state/`, `CLAUDE.md`, `.claude/settings.json` (permission DENY rules for the known send tools only, a
-  second layer behind the hook; never an allow rule).
+  ids), `state/`, `CLAUDE.md`, `.claude/settings.json` (the send gate hook, plus permission DENY rules for the known
+  send tools as a second layer behind it; never an allow rule).
 - Claude config: the person's normal one, changed only through `claude plugin marketplace add|update` and
   `claude plugin install|update`.
 
@@ -93,3 +93,14 @@ session.
 Calendar events are gated too, because an invitation is a send: an event made with guests is refused, and so is any
 change, move or removal of an event (the gate cannot see who is already on it). An event with no guests, such as a
 block on her own calendar, passes.
+
+## The private name list
+
+The privacy scan uses two lists. The generic one (paths from one PC, addresses, an internal host shape) is in
+`tests/test_privacy.py` and ships with the kit. The other is a list of real names to keep out. It is not in any
+repository, because a list of names to hide is itself those names. It lives only on the PC that cuts releases, as
+`tests/private_words.txt` (one `label<TAB>regular expression` per line), which git ignores and `tools/make_kit.py`
+never packs.
+
+The cost is that the name scan runs only on that PC. So `make_kit.py` refuses a release build (one with `--source`)
+when the list is missing, unless `--without-private-list` is given on purpose.

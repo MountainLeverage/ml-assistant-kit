@@ -180,9 +180,9 @@ class Hook(unittest.TestCase):
 
 
 class Matcher(unittest.TestCase):
-    def test_hooks_json_matcher(self):
-        hooks = json.loads((_helpers.KIT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
-        entry = hooks["hooks"]["PreToolUse"][0]
+    def test_gate_matcher(self):
+        import seat_setup
+        entry = seat_setup.gate_hook(sys.executable, "kit")
         rx = re.compile(entry["matcher"])
         for t in SENDS + ["mcp__claude_ai_Google_Calendar__create_event", "mcp__cal__updateEvent",
                           "mcp__claude_ai_Google_Calendar__delete_event", "mcp__cal__add_invitees",
@@ -190,7 +190,57 @@ class Matcher(unittest.TestCase):
             self.assertTrue(rx.fullmatch(t) and rx.search(t), t)
         for t in NEVER_MATCHED:
             self.assertFalse(rx.search(t), t)
-        self.assertIn("${CLAUDE_PLUGIN_ROOT}/scripts/send_gate.py", entry["hooks"][0]["command"])
+        self.assertTrue(entry["hooks"][0]["args"][-1].endswith("send_gate.py"))
+
+    def test_plugin_hooks_json_has_no_second_gate(self):
+        """The gate is in the seat's settings only; a plugin copy would fire twice in a seat."""
+        hooks = json.loads((_helpers.KIT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+        self.assertEqual(hooks["hooks"], {})
+
+
+class ExecForm(unittest.TestCase):
+    """The hook exactly as the seat's settings hold it, spawned with no shell and a PATH with no Python on it."""
+
+    def setUp(self):
+        self.td = tempfile.TemporaryDirectory()
+        base = os.path.join(self.td.name, "with space")
+        self.seat = os.path.join(base, "My Seat")
+        os.makedirs(os.path.join(self.seat, ".seat"))
+        with open(os.path.join(self.seat, ".seat", "seat.json"), "w", encoding="utf-8") as f:
+            f.write("{}")
+        self.kit_home = os.path.join(base, "kit home")
+        scripts = os.path.join(self.kit_home, "current", "plugins", "ml-seat-kit", "scripts")
+        os.makedirs(scripts)
+        with open(GATE, "rb") as src, open(os.path.join(scripts, "send_gate.py"), "wb") as dst:
+            dst.write(src.read())
+        root = os.environ.get("SystemRoot", r"C:\Windows")
+        self.env = {k: v for k, v in os.environ.items() if k.upper() in ("SYSTEMROOT", "WINDIR", "TEMP", "TMP")}
+        self.env.update(PATH=os.pathsep.join([os.path.join(root, "System32"), root]), CLAUDE_PROJECT_DIR=self.seat)
+
+    def tearDown(self):
+        self.td.cleanup()
+
+    def spawn(self, hook):
+        return subprocess.run([hook["command"]] + hook["args"], input=json.dumps(ev(SENDS[0], self.seat)),
+                              capture_output=True, text=True, timeout=60, cwd=self.seat, env=self.env)
+
+    def test_absolute_python_with_spaces_blocks_without_python_on_path(self):
+        import seat_setup
+        hook = seat_setup.gate_hook(sys.executable, self.kit_home)["hooks"][0]
+        self.assertEqual((hook["onFailure"], hook["args"][0]), ("block", "-I"))
+        self.assertTrue(os.path.isabs(hook["command"]) and os.path.isfile(hook["command"]))
+        r = self.spawn(hook)
+        self.assertEqual(r.returncode, 2)
+        self.assertTrue(r.stderr.startswith("Drafts only:"), r.stderr)
+        with open(os.path.join(self.seat, ".seat", "logs", "send_gate.log"), encoding="utf-8") as f:
+            self.assertIn("DENY " + SENDS[0], f.read())
+
+    def test_a_missing_python_cannot_start(self):
+        """What onFailure "block" turns into a block: the saved interpreter is gone, so the hook cannot start."""
+        import seat_setup
+        hook = seat_setup.gate_hook(os.path.join(self.td.name, "gone", "python.exe"), self.kit_home)["hooks"][0]
+        with self.assertRaises(OSError):
+            self.spawn(hook)
 
 
 if __name__ == "__main__":

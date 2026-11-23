@@ -4,6 +4,7 @@ import io
 import json
 import os
 import pathlib
+import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -54,13 +55,44 @@ class Setup(unittest.TestCase):
         self.assertIn("Step 5 of 6: setting up your assistant's folder ... ", out)
         self.assertIn("What only you can do", out)
 
-    def test_settings_hold_deny_rules_only(self):
+    def test_settings_hold_deny_rules_and_the_gate_only(self):
         seat, _, _ = self.run_setup()
         data = json.loads((seat / ".claude" / "settings.json").read_text())
-        self.assertEqual(set(data), {"permissions"})
+        self.assertEqual(set(data), {"permissions", "hooks"})
         self.assertEqual(set(data["permissions"]), {"deny"})
         self.assertIn("mcp__claude_ai_Gmail__send_message", data["permissions"]["deny"])
         self.assertFalse((seat / ".claude" / "settings.local.json").exists())
+        (entry,) = data["hooks"]["PreToolUse"]
+        hook = entry["hooks"][0]
+        self.assertEqual(hook["command"], os.path.abspath(sys.executable))   # the Python setup ran with
+        self.assertEqual(hook["onFailure"], "block")
+        self.assertEqual(pathlib.Path(hook["args"][1]),
+                         (self.tmp / "kit").resolve() / "current/plugins/ml-seat-kit/scripts/send_gate.py")
+
+    def test_gate_is_replaced_not_doubled_and_her_hooks_stay(self):
+        seat, _, _ = self.run_setup()
+        p = seat / ".claude" / "settings.json"
+        data = json.loads(p.read_text())
+        old = data["hooks"]["PreToolUse"][0]
+        old["hooks"][0]["command"] = "C:\\old\\python.exe"                    # a Python that has since moved
+        hers = {"matcher": "Bash", "hooks": [{"type": "command", "command": "her-check"}]}
+        data["hooks"]["PreToolUse"].insert(0, hers)
+        p.write_text(json.dumps(data))
+        self.run_setup()
+        pre = json.loads(p.read_text())["hooks"]["PreToolUse"]
+        self.assertEqual(pre[0], hers)
+        self.assertEqual(len(pre), 2)
+        self.assertEqual(pre[1]["hooks"][0]["command"], os.path.abspath(sys.executable))
+        _, _, out = self.run_setup()
+        self.assertNotIn("settings", out.split("done (", 1)[1])                 # third run: nothing to change
+
+    def test_unreadable_settings_stop_setup(self):
+        seat, _, _ = self.run_setup()
+        (seat / ".claude" / "settings.json").write_text("{ not json")
+        with redirect_stdout(io.StringIO()):
+            with self.assertRaises(s.Stop) as cm:
+                s.setup_seat(args(self.tmp))
+        self.assertIn("send gate could not be put in place", str(cm.exception))
 
     def test_existing_settings_keep_her_entries(self):
         seat, _, _ = self.run_setup()

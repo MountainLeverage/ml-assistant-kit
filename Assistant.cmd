@@ -11,7 +11,8 @@ if defined SEAT_KIT_HOME set "KIT_HOME=%SEAT_KIT_HOME%"
 set "SEATS=%USERPROFILE%\Assistant"
 if defined SEAT_HOME set "SEATS=%SEAT_HOME%"
 set "SIM=,%SEAT_KIT_SIMULATE_MISSING%,"
-set "CLAUDE=%USERPROFILE%\.local\bin\claude.exe"
+set "NATIVE=%USERPROFILE%\.local\bin\claude.exe"
+set "CLAUDE=%NATIVE%"
 set "SYS=%SystemRoot%\System32"
 set "WINGET=winget"
 set "PYGET=winget install --id Python.Python.3.12 --exact --scope user --silent --accept-package-agreements --accept-source-agreements"
@@ -19,9 +20,11 @@ set "ASKIT=ask IT to install Python 3.12 for your user from python.org, then dou
 if not exist "%KIT_HOME%" mkdir "%KIT_HOME%"
 <nul set /p "=Step 1 of 6: checking for Claude Code ... "
 if not "%SIM:,claude,=%"=="%SIM%" echo missing [simulated], would run: curl -fsSL https://claude.ai/install.cmd -o "%KIT_HOME%\install-claude.cmd" then run it& goto step2
-if exist "%CLAUDE%" echo found& goto step2
+call :findclaude
+if defined CFROM echo found (%CFROM%: %CLAUDE%)& goto step2
 "%SYS%\curl.exe" -fsSL https://claude.ai/install.cmd -o "%KIT_HOME%\install-claude.cmd" && cmd /c ""%KIT_HOME%\install-claude.cmd""
 del /q "%KIT_HOME%\install-claude.cmd" 2>nul
+set "CLAUDE=%NATIVE%"
 if not exist "%CLAUDE%" set "N=1" & set "WHY=Claude Code did not install" & set "TODO=check that you are online, then double-click this file again. If it stops here twice, ask IT to allow the Claude Code installer." & goto stop
 echo installed
 :step2
@@ -67,12 +70,21 @@ if /i "%~1"=="setup" set "ASK=--ask"
 "%PY%" -I "%KIT_HOME%\current\plugins\ml-seat-kit\scripts\seat_setup.py" --claude "%CLAUDE%" --kit-home "%KIT_HOME%" --seat-home "%SEATS%" --desktop "%SEAT_DESKTOP%" %ASK%
 if errorlevel 1 pause & exit /b 1
 for /f "usebackq tokens=1* delims=|" %%a in ("%KIT_HOME%\last-seat.txt") do set "SEAT_NAME=%%a" & set "SEAT_DIR=%SEATS%\%%b"
-set "PATH=%PYDIR%;%USERPROFILE%\.local\bin;%PATH%"
+for %%i in ("%CLAUDE%") do set "CLAUDEDIR=%%~dpi"
+set "PATH=%PYDIR%;%CLAUDEDIR%;%PATH%"
 set "MCP_TIMEOUT=90000"
 echo Step 6 of 6: opening your assistant, %SEAT_NAME% ...
 if "%SEAT_KIT_DRY_OPEN%"=="1" echo [dry run] would run in "%SEAT_DIR%": "%CLAUDE%" -n "%SEAT_NAME%" "Start my assistant: run the seat-start skill."& exit /b 0
 cd /d "%SEAT_DIR%" || (set "N=6" & set "WHY=your assistant's folder is missing" & set "TODO=double-click this file again" & goto stop)
-"%CLAUDE%" -n "%SEAT_NAME%" "Start my assistant: run the seat-start skill."
+call "%CLAUDE%" -n "%SEAT_NAME%" "Start my assistant: run the seat-start skill."
+exit /b 0
+:findclaude
+rem The native install, then an npm install (npm makes claude.cmd, a shim), then anything on PATH. Never a second copy.
+set "CFROM="
+if exist "%NATIVE%" set "CLAUDE=%NATIVE%" & set "CFROM=native install" & exit /b 0
+if exist "%APPDATA%\npm\claude.exe" set "CLAUDE=%APPDATA%\npm\claude.exe" & set "CFROM=npm install" & exit /b 0
+if exist "%APPDATA%\npm\claude.cmd" set "CLAUDE=%APPDATA%\npm\claude.cmd" & set "CFROM=npm install" & exit /b 0
+for /f "delims=" %%p in ('where claude.exe claude.cmd 2^>nul') do if not defined CFROM set "CLAUDE=%%p" & set "CFROM=on PATH"
 exit /b 0
 :findpy
 set "PY="

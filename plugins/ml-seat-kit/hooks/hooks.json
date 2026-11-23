@@ -1,17 +1,4 @@
 {
-  "description": "Send gate: inside a seat folder (marker .seat/seat.json), refuses every mail send, reply, forward and calendar RSVP, every event made with guests, and every change to an event; outside a seat it does nothing.",
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "mcp__.*([Ss]end|SEND|[Rr]eply|REPLY|[Ff]orward|FORWARD|[Rr]espond|RESPOND|[Rr]svp|RSVP|[Ee]vent|EVENT|[Ii]nvit|INVIT|[Mm]eeting|MEETING|[Aa]ppointment|APPOINTMENT).*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python -I \"${CLAUDE_PLUGIN_ROOT}/scripts/send_gate.py\"",
-            "timeout": 30
-          }
-        ]
-      }
-    ]
-  }
+  "description": "Empty on purpose since 0.1.1. The send gate (scripts/send_gate.py) is a hook in each seat folder's own .claude/settings.json, written by scripts/seat_setup.py with the absolute Python the launcher found, so it runs even when Python is not on PATH. A copy here as well would fire twice in a seat.",
+  "hooks": {}
 }

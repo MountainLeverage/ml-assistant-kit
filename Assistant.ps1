@@ -8,7 +8,8 @@ if ($env:SEAT_KIT_SOURCE) { $KitSource = $env:SEAT_KIT_SOURCE }
 $KitHome = if ($env:SEAT_KIT_HOME) { $env:SEAT_KIT_HOME } else { Join-Path $env:LOCALAPPDATA 'seat-kit' }
 $Seats = if ($env:SEAT_HOME) { $env:SEAT_HOME } else { Join-Path $env:USERPROFILE 'Assistant' }
 $Sim = ",$($env:SEAT_KIT_SIMULATE_MISSING),"
-$Claude = Join-Path $env:USERPROFILE '.local\bin\claude.exe'
+$Native = Join-Path $env:USERPROFILE '.local\bin\claude.exe'
+$Claude = $Native
 $Placeholder = 'PUT-KIT-ZIP-' + 'ADDRESS-HERE'
 $Curl = Join-Path $env:SystemRoot 'System32\curl.exe'; $Tar = Join-Path $env:SystemRoot 'System32\tar.exe'
 New-Item -ItemType Directory -Force -Path $KitHome | Out-Null
@@ -33,11 +34,26 @@ function Find-Py {
   }
   return $null
 }
+function Find-Claude {
+  # The native install, then an npm install (npm makes claude.cmd, a shim), then anything on PATH. Never a second copy.
+  if (Test-Path -LiteralPath $Native) { return @($Native, 'native install') }
+  if ($env:APPDATA) {
+    foreach ($n in 'claude.exe', 'claude.cmd') {
+      $p = Join-Path $env:APPDATA "npm\$n"
+      if (Test-Path -LiteralPath $p) { return @($p, 'npm install') }
+    }
+  }
+  $g = @(Get-Command claude.exe, claude.cmd -CommandType Application -ErrorAction SilentlyContinue) | Select-Object -First 1
+  if ($g) { return @($g.Source, 'on PATH') }
+  return $null
+}
 
 Write-Host -NoNewline 'Step 1 of 6: checking for Claude Code ... '
+$found = $null
+if ($Sim -notlike '*,claude,*') { $found = Find-Claude }
 if ($Sim -like '*,claude,*') {
   Write-Host "missing [simulated], would run: curl -fsSL https://claude.ai/install.cmd -o `"$KitHome\install-claude.cmd`" then run it"
-} elseif (Test-Path $Claude) { Write-Host 'found' }
+} elseif ($found) { $Claude = $found[0]; Write-Host "found ($($found[1]): $Claude)" }
 else {
   & $Curl -fsSL https://claude.ai/install.cmd -o "$KitHome\install-claude.cmd"
   if ($LASTEXITCODE -eq 0) { & cmd.exe /c "`"$KitHome\install-claude.cmd`"" }
@@ -101,7 +117,7 @@ if ($args -contains 'setup') { $setupArgs += '--ask' }
 if ($LASTEXITCODE -ne 0) { try { [void](Read-Host 'Press Enter to close') } catch { }; return }
 $line = (Get-Content (Join-Path $KitHome 'last-seat.txt') -TotalCount 1) -split '\|', 2
 $SeatName = $line[0]; $SeatDir = Join-Path $Seats $line[1]
-$env:PATH = "$PyDir;$env:USERPROFILE\.local\bin;$env:PATH"
+$env:PATH = "$PyDir;$(Split-Path -Parent $Claude);$env:PATH"
 $env:MCP_TIMEOUT = '90000'
 Write-Host "Step 6 of 6: opening your assistant, $SeatName ..."
 if ($env:SEAT_KIT_DRY_OPEN -eq '1') { Write-Host "[dry run] would run in `"$SeatDir`": `"$Claude`" -n `"$SeatName`" `"Start my assistant: run the seat-start skill.`""; return }

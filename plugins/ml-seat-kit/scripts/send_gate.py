@@ -1,8 +1,9 @@
 """Send gate: a PreToolUse hook that keeps an assistant seat to drafts only.
 
-Wired in the plugin's hooks/hooks.json for every MCP tool whose name carries a send, reply, forward, respond or
-RSVP word, or an event or invite word (an invitation is a send). Plugin hooks run in EVERY session of the person who installed the plugin, so the gate first asks one
-question: is this session's project folder a seat folder (the marker .seat/seat.json, at the folder or above it)?
+Wired by seat_setup.py into the seat's own .claude/settings.json (absolute Python, no shell, onFailure "block") for
+every MCP tool whose name carries a send, reply, forward, respond or RSVP word, or an event or invite word (an
+invitation is a send). The gate still first asks one question: is this session's project folder a seat folder (the
+marker .seat/seat.json, at the folder or above it)?
 
   Not a seat  -> does nothing: exit 0, no output, the normal permission flow continues.
   In a seat   -> denies (exit 2, the plain reason on stderr), unless the tool is plainly a read or a draft tool
@@ -16,7 +17,7 @@ and the gate cannot see who is already on an event.
 
 There is no approval path in this version: the person sends from Gmail or answers the invite in Calendar, by hand.
 A second layer sits in the seat's project settings (permission deny rules for the known connector send tools),
-so a hook that cannot start at all (no Python) still cannot let a send through.
+and a hook that cannot start at all (its Python gone) blocks the call through onFailure "block".
 
 Standard library only, and nothing imported from the kit: a broken helper module must not open the gate.
 
