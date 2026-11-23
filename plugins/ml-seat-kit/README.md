@@ -15,13 +15,38 @@ that lists it, the same plugin installs with:
 /plugin install ml-seat-kit --marketplace <owner>/<repo>
 ```
 
+## Already have an assistant folder?
+
+Adopt mode puts the kit onto a folder that already holds an assistant, in place. It keeps the folder, its name,
+its `CLAUDE.md` (one fenced hard-limits block is appended) and its own launcher (a file named `assistant.cmd` or
+`assistant.ps1` is never created, replaced, renamed or deleted). It installs nothing, makes no shortcut and opens
+no session. First see what it would do (this writes nothing in the folder), then do it:
+
+```
+"%USERPROFILE%\Downloads\Assistant.cmd" adopt --check "C:\Example Folder"
+"%USERPROFILE%\Downloads\Assistant.cmd" adopt "C:\Example Folder"
+```
+
+Add `--name "<name>"` to skip the one question. Before any write it copies every file it changes into
+`<folder>\.seat\backup\<date-time>\`, with a list of the files it creates. To take it back:
+
+```
+"%USERPROFILE%\Downloads\Assistant.cmd" adopt --undo "C:\Example Folder"
+```
+
+Undo puts back the changed files from the backup and removes only the files adopt made that are still exactly as
+adopt wrote them; anything changed since is left in place and named. Afterward the person starts the assistant
+the same way as before. The send gate applies however the session is started, because it is in the folder's own
+`.claude\settings.json` with the full path of Python. Adopt needs a Python from python.org: if the only one found
+is the Microsoft Store one, or none, it stops and installs nothing.
+
 ## What each file is
 
 | File | What it does |
 |---|---|
 | `launcher/Assistant.cmd` | The one file the person gets. Six steps, each one plain line: Claude Code, Python, the kit, the plugin, the seat folder, open. Running it again is how they start each day. Step 1 uses a Claude Code that is already there (the native `%USERPROFILE%\.local\bin\claude.exe`, then npm's `%APPDATA%\npm\claude.cmd`, then `where claude`) and downloads one only when none is found. |
 | `launcher/Assistant.ps1` | The same six steps and lines, for pasting into PowerShell when a downloaded `.cmd` is blocked. |
-| `scripts/seat_setup.py` | Steps 4 and 5: registers the kit folder as a local marketplace, installs or updates the plugin, makes or checks the seat folder, asks three optional questions on the first run, runs the self tests (once per kit version) and a dry loop check, makes one desktop shortcut. |
+| `scripts/seat_setup.py` | Steps 4 and 5: registers the kit folder as a local marketplace, installs or updates the plugin, makes or checks the seat folder, asks three optional questions on the first run, runs the self tests (once per kit version) and a dry loop check, makes one desktop shortcut. Also adopt mode (`adopt`, `adopt --check`, `adopt --undo`) for a folder the person already has. |
 | `scripts/send_gate.py` | The send gate. A PreToolUse hook on every MCP tool named with send, reply, forward, respond or RSVP. Inside a seat folder it denies (exit 2, plain reason); outside one it does nothing. Fails closed inside a seat. Since 0.1.1 it is wired in the seat's `.claude/settings.json` (by `seat_setup.py`), not in `hooks/hooks.json` (now empty): exec form with the absolute Python the launcher found, so it runs in a session started without the launcher, and `onFailure: "block"` (Claude Code 2.1.295 or later) so a vanished Python blocks the call. |
 | `scripts/tick.py` | The loop: `check` (one loop per seat), `begin` (STOP, the search epoch, due promises, backup due), `end`, `sleep` (the background sleeper; refuses a second arm). |
 | `scripts/wakes.py` | Promises for later: one dated row each, fired by the sleeper, closed with a line. |

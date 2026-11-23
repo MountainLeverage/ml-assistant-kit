@@ -36,6 +36,20 @@ PUT-KIT-ZIP-ADDRESS-HERE is a stale build and must not be sent.
     the checks resume.
 12. Close the window and start again from the desktop shortcut. It picks up the same folder and ledger.
 
+## Adopt mode (a folder that already holds an assistant)
+
+Run these on the folder the person already uses, with her own launcher in it.
+
+13. `Assistant.cmd adopt --check "<your folder>"`. The output lists the backup folder, each file it would
+    create, the deny rules and the gate hook it would add, the CLAUDE.md block (or "already there"), the plugin
+    note, and that her launcher stays. Nothing in the folder changes.
+14. `Assistant.cmd adopt "<your folder>"`. It ends with "Your folder is adopted. No session was opened." and
+    names her own launcher as the way to start.
+15. Start the assistant from her own launcher, as before. Ask it to email yourself. It must be refused with a
+    line that starts "Drafts only:", and `.seat\logs\send_gate.log` in her folder gets a DENY line.
+16. `Assistant.cmd adopt --undo "<your folder>"`. Her CLAUDE.md and `.claude\settings.json` are back as they
+    were, the marker is gone, and her launcher is untouched.
+
 ## What to send back
 
 For each numbered item: passed, failed, or what happened instead. For a failure, the last lines on screen.

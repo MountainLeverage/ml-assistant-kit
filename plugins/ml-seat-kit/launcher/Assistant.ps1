@@ -2,7 +2,14 @@
 # downloaded .cmd is blocked. Run it any time: it installs only what is missing and brings the newest kit.
 # Test switches: SEAT_KIT_SOURCE, SEAT_KIT_HOME, SEAT_HOME, SEAT_DESKTOP, SEAT_KIT_DRY_OPEN=1,
 # SEAT_KIT_SIMULATE_MISSING=claude,python,winget
+# Adopt mode puts the kit onto a folder you already use, in place, and installs nothing:
+#   adopt --check "<your folder>"   (shows what it would do; writes nothing there)
+#   adopt "<your folder>"           (does it; add --name "<name>" to skip the one question)
+#   adopt --undo "<your folder>"
 & {
+$Adopt = ($args.Count -gt 0 -and $args[0] -eq 'adopt')
+$Mode = ''
+if ($Adopt -and ($args -contains '--check')) { $Mode = 'check' } elseif ($Adopt -and ($args -contains '--undo')) { $Mode = 'undo' }
 $KitSource = 'PUT-KIT-ZIP-ADDRESS-HERE'
 if ($env:SEAT_KIT_SOURCE) { $KitSource = $env:SEAT_KIT_SOURCE }
 $KitHome = if ($env:SEAT_KIT_HOME) { $env:SEAT_KIT_HOME } else { Join-Path $env:LOCALAPPDATA 'seat-kit' }
@@ -26,6 +33,7 @@ function Find-Py {
   try { $c += @(& py -3 -c "import sys; print(sys.executable)" 2>$null) } catch { }
   $c += @(Get-Command python -All -ErrorAction SilentlyContinue | Where-Object { $_.Source -notmatch 'WindowsApps' } |
           ForEach-Object { $_.Source })
+  if ($Adopt) { $c = @($c | Where-Object { $_ -notmatch 'WindowsApps' }) }
   foreach ($p in $c) {
     if ($p -and (Test-Path $p)) {
       & $p -I -c "import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)" 2>$null
@@ -54,6 +62,7 @@ if ($Sim -notlike '*,claude,*') { $found = Find-Claude }
 if ($Sim -like '*,claude,*') {
   Write-Host "missing [simulated], would run: curl -fsSL https://claude.ai/install.cmd -o `"$KitHome\install-claude.cmd`" then run it"
 } elseif ($found) { $Claude = $found[0]; Write-Host "found ($($found[1]): $Claude)" }
+elseif ($Adopt) { Write-Host 'not found where the kit looks; adopt does not install it' }
 else {
   & $Curl -fsSL https://claude.ai/install.cmd -o "$KitHome\install-claude.cmd"
   if ($LASTEXITCODE -eq 0) { & cmd.exe /c "`"$KitHome\install-claude.cmd`"" }
@@ -69,6 +78,12 @@ if ($Sim -like '*,python,*') {
   if ($Sim -like '*,winget,*') { Write-Host '[simulated] without winget it would stop here: Python is needed and this laptop cannot install it by itself. What to do: ask IT to install Python 3.12 for your user from python.org, then double-click this file again.' }
   if (-not $Py) { Stop-Seat 2 'no Python found to continue the simulation' 'install Python first'; return }
 } elseif ($Py) { Write-Host 'found' }
+elseif ($Adopt) {
+  Write-Host 'no Python this kit can use'
+  $seen = @(Get-Command python, python3, py -All -CommandType Application -ErrorAction SilentlyContinue | ForEach-Object { $_.Source })
+  if ($seen) { foreach ($s in $seen) { Write-Host "   found, not used: $s" } } else { Write-Host '   found: no Python at all' }
+  Stop-Seat 2 'adopt needs a Python from python.org (a Microsoft Store one is not used) and installs nothing; nothing was changed' 'ask IT to install Python 3.12 for your user from python.org, then run this again'; return
+}
 else {
   $winget = (Get-Command winget -ErrorAction SilentlyContinue).Source
   if (-not $winget -and (Test-Path "$env:LOCALAPPDATA\Microsoft\WindowsApps\winget.exe")) { $winget = "$env:LOCALAPPDATA\Microsoft\WindowsApps\winget.exe" }
@@ -78,7 +93,7 @@ else {
   if (-not $Py) { Stop-Seat 2 'Python did not install' 'run this again. If it stops here twice, ask IT to install Python 3.12 for your user from python.org.'; return }
   Write-Host 'installed'
 }
-Set-Content -Path (Join-Path $KitHome 'python.txt') -Value $Py -Encoding ASCII
+if (-not $Mode) { Set-Content -Path (Join-Path $KitHome 'python.txt') -Value $Py -Encoding ASCII }
 $PyDir = Split-Path -Parent $Py
 
 Write-Host -NoNewline 'Step 3 of 6: getting the assistant kit ... '
@@ -109,6 +124,16 @@ else {
   Write-Host 'could not get a newer copy, using the one you already have'
 }
 
+if ($Adopt) {
+  # Adopt never opens a session, never copies the launcher, never makes a shortcut. seat_setup.py does the rest.
+  $adoptArgs = @('-I', (Join-Path $current 'plugins\ml-seat-kit\scripts\seat_setup.py'), 'adopt', '--claude', $Claude,
+                 '--kit-home', $KitHome, '--seat-home', $Seats)
+  if ($PSCommandPath) { $adoptArgs += @('--launcher', $PSCommandPath) }
+  $adoptArgs += @($args | Select-Object -Skip 1)
+  & $Py @adoptArgs
+  try { [void](Read-Host 'Press Enter to close') } catch { }
+  return
+}
 if (-not (Test-Path (Join-Path $KitHome 'Assistant.cmd')) -and (Test-Path (Join-Path $current 'Assistant.cmd'))) { Copy-Item (Join-Path $current 'Assistant.cmd') (Join-Path $KitHome 'Assistant.cmd') }
 $setupArgs = @('-I', (Join-Path $current 'plugins\ml-seat-kit\scripts\seat_setup.py'), '--claude', $Claude, '--kit-home', $KitHome, '--seat-home', $Seats)
 if ($env:SEAT_DESKTOP) { $setupArgs += @('--desktop', $env:SEAT_DESKTOP) }
