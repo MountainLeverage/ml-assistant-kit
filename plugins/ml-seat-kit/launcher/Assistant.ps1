@@ -15,6 +15,7 @@ $NoInst = if ($Adopt) { 'adopt' } elseif ($SelfTest) { 'selftest' } else { '' }
 $Mode = if ($SelfTest) { 'selftest' } else { '' }
 if ($Adopt -and ($args -contains '--check')) { $Mode = 'check' } elseif ($Adopt -and ($args -contains '--undo')) { $Mode = 'undo' }
 $KitSource = 'PUT-KIT-ZIP-ADDRESS-HERE'
+$KitNeed = '0.1.4'   # the oldest kit self test and adopt may run: this launcher's own version
 if ($env:SEAT_KIT_SOURCE) { $KitSource = $env:SEAT_KIT_SOURCE }
 $KitHome = if ($env:SEAT_KIT_HOME) { $env:SEAT_KIT_HOME } else { Join-Path $env:LOCALAPPDATA 'seat-kit' }
 $Seats = if ($env:SEAT_HOME) { $env:SEAT_HOME } else { Join-Path $env:USERPROFILE 'Assistant' }
@@ -22,11 +23,12 @@ $Sim = ",$($env:SEAT_KIT_SIMULATE_MISSING),"
 $Native = Join-Path $env:USERPROFILE '.local\bin\claude.exe'
 $Claude = $Native
 $Placeholder = 'PUT-KIT-ZIP-' + 'ADDRESS-HERE'
-$Curl = Join-Path $env:SystemRoot 'System32\curl.exe'; $Tar = Join-Path $env:SystemRoot 'System32\tar.exe'
+$Curl = Join-Path $env:SystemRoot 'System32\curl.exe'
 New-Item -ItemType Directory -Force -Path $KitHome | Out-Null
 function Stop-Seat($n, $why, $todo) {
   Write-Host ''; Write-Host "Stopped at step ${n}: $why."; Write-Host "What to do: $todo"
   try { [void](Read-Host 'Press Enter to close') } catch { }
+  if ($PSCommandPath) { exit 1 }   # run as a file: a stop ends with exit code 1
 }
 function Find-Py {
   $c = @()
@@ -100,37 +102,63 @@ else {
 if (-not $Mode) { Set-Content -Path (Join-Path $KitHome 'python.txt') -Value $Py -Encoding ASCII }
 $PyDir = Split-Path -Parent $Py
 
+# Step 3 never renames, overwrites or deletes anything that may be in use. The download gets a new file name
+# each time; the zip puts itself into kits\<version>, a folder that did not exist a moment before, then switches
+# kit.txt to it (see kit_place.py). The old folder "current" (kit 0.1.3 and older) is left exactly as it is.
+# Self test and adopt never run a kit older than $KitNeed, and never an older kit in place of the newest.
 Write-Host -NoNewline 'Step 3 of 6: getting the assistant kit ... '
-$incoming = Join-Path $KitHome 'incoming'; $current = Join-Path $KitHome 'current'; $previous = Join-Path $KitHome 'previous'
-$zip = Join-Path $KitHome 'kit.zip'; $got = $false
-if ($KitSource -ne $Placeholder) {
-  if (Test-Path $incoming) { Remove-Item -Recurse -Force $incoming }
-  New-Item -ItemType Directory -Force -Path $incoming | Out-Null
-  if (Test-Path (Join-Path $KitSource '.claude-plugin\marketplace.json')) { Copy-Item -Recurse -Force (Join-Path $KitSource '*') $incoming; $got = $true }
-  else {
-    if ($KitSource -like 'https://*') { & $Curl -fsL $KitSource -o $zip; $got = ($LASTEXITCODE -eq 0) }
-    else { try { Copy-Item -Force $KitSource $zip -ErrorAction Stop; $got = $true } catch { $got = $false } }
-    if ($got) { & $Tar -xf $zip -C $incoming; $got = ($LASTEXITCODE -eq 0) }
-  }
-  $got = $got -and (Test-Path (Join-Path $incoming 'plugins\ml-seat-kit\scripts\seat_setup.py'))
+$rc3 = $null; $whyKit = $null; $kitDir = $null; $kv = $null; $kok = $null
+$tok = '{0}' -f (Get-Random)
+$errf = Join-Path $KitHome "dl-$tok.txt"
+if ($KitSource -eq $Placeholder) { $whyKit = 'This launcher has no download address.' }
+elseif ($KitSource -like 'https://*') {
+  $dl = Join-Path $KitHome "dl-$tok.zip"
+  & $Curl -fsSL --retry 2 --retry-delay 1 --stderr $errf $KitSource -o $dl
+  if ($LASTEXITCODE -ne 0) { $whyKit = 'The download did not work.' }
+  else { & $Py -I $dl --kit-home $KitHome 2>$null; $rc3 = $LASTEXITCODE }
+  Remove-Item -Force -ErrorAction SilentlyContinue -LiteralPath $dl
+} elseif (Test-Path -LiteralPath (Join-Path $KitSource '.claude-plugin\marketplace.json')) {
+  & $Py -I (Join-Path $KitSource 'plugins\ml-seat-kit\scripts\kit_place.py') --kit-home $KitHome --folder $KitSource 2>$null
+  $rc3 = $LASTEXITCODE
+} elseif (-not (Test-Path -LiteralPath $KitSource)) { $whyKit = "The kit file $KitSource is not there." }
+else { & $Py -I $KitSource --kit-home $KitHome 2>$null; $rc3 = $LASTEXITCODE }
+if ($whyKit) {
+  Write-Host 'not done'
+  Write-Host "   $whyKit"
+  if (Test-Path -LiteralPath $errf) { Get-Content -LiteralPath $errf | ForEach-Object { Write-Host "   $_" } }
+  Write-Host "   The kit folder is $KitHome"
+} elseif ($rc3 -ne 0) {
+  if ($rc3 -ne 3) { Write-Host 'not done'; Write-Host '   The kit that was fetched could not put itself in place (a kit older than 0.1.4 cannot).' }
+  Write-Host "   The kit folder is $KitHome"
 }
-if ($got) {
-  if (Test-Path $previous) { Remove-Item -Recurse -Force $previous }
-  try { if (Test-Path $current) { Rename-Item $current 'previous' -ErrorAction Stop }; Rename-Item $incoming 'current' -ErrorAction Stop }
-  catch { $got = $false }
-  if (Test-Path $previous) { Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $previous }
+Remove-Item -Force -ErrorAction SilentlyContinue -LiteralPath $errf
+$ptr = Join-Path $KitHome 'kit.txt'; $active = $null
+if (Test-Path -LiteralPath $ptr) { try { $active = [string](Get-Content -LiteralPath $ptr -TotalCount 1 -ErrorAction Stop) } catch { $active = $null } }
+if ($active) { $active = $active.Trim() }
+if ($active -and (Test-Path -LiteralPath (Join-Path $KitHome "kits\$active\plugins\ml-seat-kit\scripts\seat_setup.py"))) { $kitDir = Join-Path $KitHome "kits\$active" }
+$current = Join-Path $KitHome 'current'
+if ($rc3 -ne 0 -and -not (Test-Path -LiteralPath $ptr) -and (Test-Path -LiteralPath (Join-Path $current 'plugins\ml-seat-kit\scripts\seat_setup.py'))) { $kitDir = $current }
+if ($kitDir) {
+  $vk = @(& $Py -I -c "import json,re,sys;v=json.load(open(sys.argv[1],encoding='utf-8'))['version'];t=lambda s:[int(x) for x in re.findall('[0-9]+',s)[:3]];print(v,int(max(t(v),t(sys.argv[2]))==t(v)))" (Join-Path $kitDir 'plugins\ml-seat-kit\.claude-plugin\plugin.json') $KitNeed 2>$null)
+  if ($vk.Count -gt 0 -and $vk[0]) { $kv, $kok = ([string]$vk[0]).Split(' ', 2) }
 }
-Remove-Item -Force -ErrorAction SilentlyContinue $zip
-if ($got) { Write-Host 'done' }
-else {
-  if (Test-Path $incoming) { Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $incoming }
-  if (-not (Test-Path (Join-Path $current 'plugins\ml-seat-kit\scripts\seat_setup.py'))) { Stop-Seat 3 'could not get the assistant kit' 'check that you are online and run this again. If this came by email or chat, ask the sender for a fresh copy.'; return }
-  Write-Host 'could not get a newer copy, using the one you already have'
+if (-not $kv) { $kv = 'unknown' }
+if ($rc3 -eq 0 -and -not $kitDir) { Stop-Seat 3 'the new kit was put in place but kit.txt does not name it, so nothing was run' 'check that you are online, close any window or program using the kit folder named above, and run this again. If it stops here twice, send this window to whoever set up your assistant.'; return }
+if ($NoInst) {
+  if ($rc3 -ne 0 -and $kitDir) { Stop-Seat 3 "could not get kit $KitNeed, and the kit already on this PC ($kv) is never used for $NoInst, so nothing was run" 'check that you are online, close any window or program using the kit folder named above, and run this again. If it stops here twice, send this window to whoever set up your assistant.'; return }
+  if ($rc3 -ne 0) { Stop-Seat 3 "could not get kit $KitNeed, so nothing was run" 'check that you are online, close any window or program using the kit folder named above, and run this again. If it stops here twice, send this window to whoever set up your assistant.'; return }
+  if ($kok -ne '1') { Stop-Seat 3 "the kit that was put in place is $kv, and $NoInst needs kit $KitNeed or newer, so nothing was run" 'check that you are online, close any window or program using the kit folder named above, and run this again. If it stops here twice, send this window to whoever set up your assistant.'; return }
+} else {
+  # A normal start uses the kit already here when no newer one comes: being offline must not stop the assistant.
+  if ($rc3 -ne 0 -and (Test-Path -LiteralPath $ptr) -and -not $kitDir) { Stop-Seat 3 'kit.txt names a kit folder that is not there' 'check that you are online and double-click this file again. If it stops here twice, send this window to whoever set up your assistant.'; return }
+  if (-not $kitDir) { Stop-Seat 3 'could not get the assistant kit' 'check that you are online and double-click this file again. If this file came by email or chat, ask the sender for a fresh copy.'; return }
+  if ($rc3 -ne 0) { Write-Host '   Using the kit already on this laptop.' }
 }
+Write-Host "Kit in use: $kv ($kitDir)"
 
 if ($SelfTest) {
   # Read only: runs the kit's self tests and prints what it found. No plugin call, no seat, no shortcut, no session.
-  $stArgs = @('-I', (Join-Path $current 'plugins\ml-seat-kit\scripts\seat_setup.py'), 'selftest', '--kit-home', $KitHome)
+  $stArgs = @('-I', (Join-Path $kitDir 'plugins\ml-seat-kit\scripts\seat_setup.py'), 'selftest', '--kit-home', $KitHome)
   & $Py @stArgs
   $rc = $LASTEXITCODE
   try { [void](Read-Host 'Press Enter to close') } catch { }
@@ -139,16 +167,18 @@ if ($SelfTest) {
 }
 if ($Adopt) {
   # Adopt never opens a session, never copies the launcher, never makes a shortcut. seat_setup.py does the rest.
-  $adoptArgs = @('-I', (Join-Path $current 'plugins\ml-seat-kit\scripts\seat_setup.py'), 'adopt', '--claude', $Claude,
+  $adoptArgs = @('-I', (Join-Path $kitDir 'plugins\ml-seat-kit\scripts\seat_setup.py'), 'adopt', '--claude', $Claude,
                  '--kit-home', $KitHome, '--seat-home', $Seats)
   if ($PSCommandPath) { $adoptArgs += @('--launcher', $PSCommandPath) }
   $adoptArgs += @($args | Select-Object -Skip 1)
   & $Py @adoptArgs
+  $rc = $LASTEXITCODE
   try { [void](Read-Host 'Press Enter to close') } catch { }
+  if ($PSCommandPath) { exit $rc }
   return
 }
-if (-not (Test-Path (Join-Path $KitHome 'Assistant.cmd')) -and (Test-Path (Join-Path $current 'Assistant.cmd'))) { Copy-Item (Join-Path $current 'Assistant.cmd') (Join-Path $KitHome 'Assistant.cmd') }
-$setupArgs = @('-I', (Join-Path $current 'plugins\ml-seat-kit\scripts\seat_setup.py'), '--claude', $Claude, '--kit-home', $KitHome, '--seat-home', $Seats)
+if (-not (Test-Path (Join-Path $KitHome 'Assistant.cmd')) -and (Test-Path (Join-Path $kitDir 'Assistant.cmd'))) { Copy-Item (Join-Path $kitDir 'Assistant.cmd') (Join-Path $KitHome 'Assistant.cmd') }
+$setupArgs = @('-I', (Join-Path $kitDir 'plugins\ml-seat-kit\scripts\seat_setup.py'), '--claude', $Claude, '--kit-home', $KitHome, '--seat-home', $Seats)
 if ($env:SEAT_DESKTOP) { $setupArgs += @('--desktop', $env:SEAT_DESKTOP) }
 if ($args -contains 'setup') { $setupArgs += '--ask' }
 & $Py @setupArgs

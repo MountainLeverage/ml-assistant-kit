@@ -2,9 +2,11 @@
 
     python -I make_kit.py --out <kit.zip> [--source <https URL where this zip will be served>]
 
-Zip layout (expanded by the launcher into %LOCALAPPDATA%\\seat-kit\\current, then registered as a local folder
-marketplace named "seat-kit"):
+Zip layout (the launcher runs the zip itself, `python -I <zip> --kit-home <folder>`, which unpacks it into
+%LOCALAPPDATA%\\seat-kit\\kits\\<version> and switches kit.txt to it; see scripts/kit_place.py. That folder is then
+registered as a local folder marketplace named "seat-kit"):
 
+    __main__.py                         runs plugins/ml-seat-kit/scripts/kit_place.py from inside the zip
     .claude-plugin/marketplace.json     lists the one plugin, ml-seat-kit, at ./plugins/ml-seat-kit
     plugins/ml-seat-kit/...             the plugin folder, verbatim (no caches)
     Assistant.cmd, Assistant.ps1        the launchers, with KIT_SOURCE filled in when --source is given
@@ -25,6 +27,15 @@ SKIP_DIRS = {"__pycache__", ".pytest_cache"}
 SKIP_SUFFIX = (".pyc", ".pyo", ".tmp")
 SKIP_NAMES = {"private_words.txt"}   # the private deny list (tests/test_privacy.py): never in a zip
 PLACEHOLDER = b"PUT-KIT-ZIP-ADDRESS-HERE"
+ZIP_MAIN = b'''"""Run by the assistant launcher: python -I <this zip> --kit-home <folder>. Puts this kit in place."""
+import os
+import sys
+
+sys.path.insert(0, os.path.join(sys.argv[0], "plugins", "ml-seat-kit", "scripts"))
+import kit_place  # noqa: E402
+
+raise SystemExit(kit_place.main(sys.argv[1:] + ["--zip", os.path.abspath(sys.argv[0])]))
+'''
 
 
 def plugin_files():
@@ -81,6 +92,20 @@ def require_private_list(words, source, without=False):
         print("WARNING: release build WITHOUT the private name list; names were not scanned for.")
 
 
+def kit_need_lines(version):
+    """The line in each launcher that names the oldest kit self test and adopt may run: the kit's own version."""
+    return {"Assistant.cmd": ('set "KIT_NEED=%s"' % version).encode("ascii"),
+            "Assistant.ps1": ("$KitNeed = '%s'" % version).encode("ascii")}
+
+
+def require_kit_need(version):
+    """Refuse a zip whose launchers would accept an older kit than the one they ship with."""
+    for name, line in kit_need_lines(version).items():
+        if line not in (PLUGIN / "launcher" / name).read_bytes():
+            raise SystemExit("REFUSED: launcher/%s does not say %s (it must name this kit's version, %s)"
+                             % (name, line.decode("ascii"), version))
+
+
 def run_tests():
     """The kit's whole suite in a fresh python -I, exactly as the self tests run it (seat_setup.run_suite)."""
     if str(PLUGIN / "scripts") not in sys.path:
@@ -109,9 +134,11 @@ def build(out, source=None, without_private_list=False, tests=run_tests):
     print("running the kit's tests first ...")
     print(require_passing(tests()))
     version = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))["version"]
-    entries = {".claude-plugin/marketplace.json": (json.dumps(marketplace(version), indent=2) + "\n").encode("utf-8")}
+    entries = {".claude-plugin/marketplace.json": (json.dumps(marketplace(version), indent=2) + "\n").encode("utf-8"),
+               "__main__.py": ZIP_MAIN}
     for p in plugin_files():
         entries["plugins/ml-seat-kit/" + p.relative_to(PLUGIN).as_posix()] = p.read_bytes()
+    require_kit_need(version)
     for name in ("Assistant.cmd", "Assistant.ps1"):
         entries[name] = stamp((PLUGIN / "launcher" / name).read_bytes(), source)
     hits = []

@@ -57,6 +57,16 @@ Run these on the folder the person already uses, with her own launcher in it.
     passed." Nothing is installed, no assistant folder or shortcut appears, and no session opens. If any test
     did not pass, send the whole window and that file.
 
+## A kit folder in use (0.1.4)
+
+18. Open a Command Prompt, `cd /d "%LOCALAPPDATA%\seat-kit\current\plugins\ml-seat-kit"` (on a PC that has
+    an older kit there), and leave that window open. In a second window run `Assistant.cmd selftest`. Step 3
+    ends "done", the next line is `Kit in use: 0.1.4 (...\seat-kit\kits\0.1.4)`, and the self tests run.
+    The folder `current` is still there, unchanged. Close the first window.
+19. Turn the network off and run `Assistant.cmd selftest`. Step 3 says "not done", then the reason and the kit
+    folder on lines of their own, then "Stopped at step 3: could not get kit 0.1.4 ..." naming the kit already
+    on the PC. Nothing else runs. Turn the network back on.
+
 ## What to send back
 
 For each numbered item: passed, failed, or what happened instead. For a failure, the last lines on screen.

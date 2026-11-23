@@ -5,7 +5,8 @@ Run by Assistant.cmd and Assistant.ps1 every time; running it again is safe (it 
     python -I seat_setup.py --claude <claude.exe> --kit-home <folder> [--seat-home <folder>] [--desktop <folder>]
                             [--ask] [--no-plugin] [--no-tests]
 
-  --kit-home   the folder holding current\ (the expanded kit, registered as a local marketplace) and last-seat.txt
+  --kit-home   the folder holding kits\<version>\ (each expanded kit; kit.txt names the one in use, see
+               kit_place.py), send_gate.py (the gate's fixed address), market.txt and last-seat.txt
   --seat-home  where seat folders live (default %USERPROFILE%\Assistant); the seat is <seat-home>\<assistant name>
   --desktop    where the shortcut goes (default: the Windows Desktop folder, OneDrive or not)
   --ask        ask the three questions again (names and leadership); nothing else is reset
@@ -52,6 +53,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import seat_common  # noqa: E402
+import kit_place  # noqa: E402
 
 KIT = seat_common.KIT_ROOT
 MARKETPLACE = "seat-kit"
@@ -114,10 +116,46 @@ def canon(p):
         return os.path.normcase(os.path.abspath(str(p)))
 
 
-def gate_hook(python, kit_home):
-    script = pathlib.Path(kit_home).resolve() / "current" / "plugins" / PLUGIN / "scripts" / "send_gate.py"
+def versioned(kit_home, kit=None):
+    """True when this code runs from <kit home>\\kits\\<version> (the layout of 0.1.4 and later). False when it runs
+    from the old <kit home>\\current (an older launcher brought it) or from anywhere else (tests, a checkout)."""
+    root = pathlib.Path(kit or KIT).parent.parent
+    try:
+        return _same(root.parent, pathlib.Path(kit_home) / kit_place.KITS)
+    except OSError:
+        return False
+
+
+def gate_script(kit_home, kit=None):
+    """The file a seat's gate hook runs. In the versioned layout: <kit home>\\send_gate.py, a fixed address that
+    runs the gate of the kit named in kit.txt and refuses when it cannot. Otherwise the old address inside
+    <kit home>\\current, exactly as 0.1.3 and older wrote it."""
+    kh = pathlib.Path(kit_home).resolve()
+    if versioned(kit_home, kit):
+        return kh / kit_place.SHIM
+    return kh / "current" / "plugins" / PLUGIN / "scripts" / "send_gate.py"
+
+
+def gate_hook(python, kit_home, kit=None):
+    script = gate_script(kit_home, kit)
     return {"matcher": GATE_MATCHER, "hooks": [{"type": "command", "command": long_path(python),
                                                 "args": ["-I", str(script)], "timeout": 30, "onFailure": "block"}]}
+
+
+def ensure_gate_file(kit_home, step, kit=None):
+    """In the versioned layout, make sure <kit home>\\send_gate.py is there and is this kit's gate_shim.py before a
+    hook is written that names it. Replaced only when different; one in use is kept (any copy reads kit.txt)."""
+    if not versioned(kit_home, kit):
+        return
+    shim = pathlib.Path(kit_home) / kit_place.SHIM
+    data = (pathlib.Path(kit or KIT) / "scripts" / "gate_shim.py").read_bytes()
+    try:
+        if not shim.is_file() or shim.read_bytes() != data:
+            kit_place.write_file(shim, data)
+    except OSError as e:
+        if not shim.is_file():
+            raise Stop(step, "the send gate file %s could not be written (%s); nothing was changed"
+                       % (shim, e.strerror or type(e).__name__), "send this line to whoever set up your assistant")
 
 
 def _is_gate(entry):
@@ -171,8 +209,28 @@ def _json_list(text):
         return None
 
 
-def ensure_plugin(claude, kit_home, step=4):
-    folder = str(pathlib.Path(kit_home) / "current")
+def market_folder(kit_home, kit=None):
+    """The folder registered with Claude Code as the plugin source "seat-kit": the kit folder this code runs from
+    in the versioned layout, else <kit home>\\current as before."""
+    if versioned(kit_home, kit):
+        return str(long_path(pathlib.Path(kit or KIT).parent.parent))
+    return str(pathlib.Path(kit_home) / "current")
+
+
+def registered_folder(kit_home):
+    """The folder "seat-kit" was last registered at: market.txt, written after each registration; without it, the
+    old <kit home>\\current (every kit before 0.1.4 registered that folder)."""
+    try:
+        text = (pathlib.Path(kit_home) / kit_place.MARKET).read_text(encoding="utf-8").strip()
+        if text:
+            return text
+    except (OSError, UnicodeDecodeError):
+        pass
+    return str(pathlib.Path(kit_home) / "current")
+
+
+def ensure_plugin(claude, kit_home, step=4, kit=None):
+    folder = market_folder(kit_home, kit)
     say("Step %d of 6: adding the kit to Claude ... " % step, end="")
     rc, out = _claude(claude, "plugin", "marketplace", "list", "--json")
     known = _json_list(out) if rc == 0 else None
@@ -180,13 +238,22 @@ def ensure_plugin(claude, kit_home, step=4):
         raise Stop(step, "Claude could not list its plugin sources (%s)" % _last(out),
                    "close this window, open it again, and if it stops here again, send this line to whoever set up your assistant")
     names = {m.get("name"): m for m in known if isinstance(m, dict)}
-    if MARKETPLACE in names:
+    if MARKETPLACE in names and _same(registered_folder(kit_home), folder):
         rc, out = _claude(claude, "plugin", "marketplace", "update", MARKETPLACE)
     else:
+        if MARKETPLACE in names:    # registered at another kit folder (an older version, or the old current)
+            rc, out = _claude(claude, "plugin", "marketplace", "remove", MARKETPLACE)
+            if rc != 0:
+                raise Stop(step, "Claude did not let go of the older kit folder (%s)" % _last(out),
+                           "send this line to whoever set up your assistant")
         rc, out = _claude(claude, "plugin", "marketplace", "add", folder, "--scope", "user")
     if rc != 0:
         raise Stop(step, "Claude did not accept the kit folder (%s)" % _last(out),
                    "send this line to whoever set up your assistant")
+    try:
+        kit_place.write_file(pathlib.Path(kit_home) / kit_place.MARKET, (folder + "\n").encode("utf-8"))
+    except OSError:
+        pass        # without the record the next run registers the folder again; nothing breaks
     rc, out = _claude(claude, "plugin", "list", "--json")
     installed = _json_list(out) if rc == 0 else None
     ids = {p.get("id") for p in (installed or []) if isinstance(p, dict)}
@@ -461,7 +528,7 @@ def windows_version():
         return "unknown"
 
 
-def run_suite(kit_home=None, kit=None, timeout=300):
+def run_suite(kit_home=None, kit=None, timeout=600):
     """Run the kit's tests in a fresh python -I. Returns parse_unittest's dict plus ok, output, returncode and, when
     kit_home is given, file (the report path) and file_error (None when it was written)."""
     kit = pathlib.Path(kit or KIT)
@@ -572,6 +639,7 @@ def setup_seat(args):
     seat_common.save_config(seat, cfg)                 # the marker: from here on this folder is a seat
     made = seed_state(seat)
     claude_md = write_claude_md(seat, cfg, refresh)
+    ensure_gate_file(args.kit_home, 5)
     settings = write_settings(seat, gate_hook(sys.executable, args.kit_home))
     notes = []
     if cfg.get("tests_passed_for") != kit_version() and not args.no_tests:
@@ -950,6 +1018,9 @@ def print_check(folder, args, plan):
                 say("       send gate hook (PreToolUse): for any tool whose name has a %s word, run" % GATE_WORDS)
                 say('         "%s" -I "%s"' % (plan["gate"]["hooks"][0]["command"], plan["gate"]["hooks"][0]["args"][1]))
                 say("         and if it cannot start, block the tool. It refuses sending only inside this folder.")
+                if versioned(args.kit_home):
+                    say("         That file stays at the same place for every kit version: it runs the send gate of "
+                        "the kit in use, and refuses the tool if it cannot.")
         n += 1
         action = plan["claude_md"][0]
         if action == "already there":
@@ -979,11 +1050,12 @@ def print_check(folder, args, plan):
     say("Never done in adopt mode: a file named assistant.cmd or assistant.ps1 in your folder is never created, "
         "replaced, renamed or deleted; no desktop shortcut; no session opened; nothing renamed; nothing installed.")
     say("")
-    kit_current = pathlib.Path(long_path(args.kit_home)) / "current"
-    if kit_current.is_dir():
+    kit_now = pathlib.Path(long_path(KIT.parent.parent)) if versioned(args.kit_home) else \
+        pathlib.Path(long_path(args.kit_home)) / "current"
+    if kit_now.is_dir():
         say("Outside your folder: to run this check, the launcher put the newest kit into %s (the kit's own folder; "
             "every run of the launcher does this). Nothing else was written: no plugin call, no Claude settings, "
-            "no shortcut." % kit_current)
+            "no shortcut." % kit_now)
     say("")
     say("To do it:   %s" % _launcher_line(args.launcher, "adopt", '"%s"' % folder))
     say("To undo it: %s" % _launcher_line(args.launcher, "adopt", "--undo", '"%s"' % folder))
@@ -1032,6 +1104,7 @@ def adopt(args):
             raise Stop(4, "the kit's self tests failed (%s); nothing was changed" % tail, SELFTEST_TODO)
         say("   The kit's self tests passed.")
     say("Step 5 of 6: putting the kit onto your folder ... ", end="")
+    ensure_gate_file(args.kit_home, 5)
     modified, created = _modified_and_created(folder, plan)
     if plan["again"] and not modified and not created:
         say("already adopted, nothing changed")
@@ -1257,7 +1330,7 @@ def selftest_main(argv):
     except Stop as e:
         say(str(e))
         return 1
-    say("Step 4 of 6: running the kit's self tests only (this takes a minute) ... ", end="")
+    say("Step 4 of 6: running the kit's self tests only (this takes a few minutes) ... ", end="")
     res = run_suite(args.kit_home)
     names = failed_names(res)
     say("all passed" if res["ok"] else "some did not pass")
