@@ -1,7 +1,9 @@
 """Checks for tools/make_kit.py: a release build never silently goes without the private name list."""
 import contextlib
 import io
+import pathlib
 import sys
+import tempfile
 import unittest
 
 from tests import _helpers
@@ -40,6 +42,35 @@ class PrivateListGuard(unittest.TestCase):
     def test_the_list_is_never_packed(self):
         self.assertIn("private_words.txt", mk.SKIP_NAMES)
         self.assertFalse([p for p in mk.plugin_files() if p.name == "private_words.txt"])
+
+
+class TestsFirst(unittest.TestCase):
+    """make_kit runs the whole suite (a fake result here: the real run would be this suite again) and refuses."""
+
+    FAILED = {"ok": False, "ran": 120, "summary": "FAILED (failures=1)", "skipped": 0,
+              "failed": [("FAIL", "Klass.test_one", "AssertionError: 1 != 2")], "output": "FAIL: test_one\nFAILED"}
+    PASSED = {"ok": True, "ran": 120, "summary": "OK", "skipped": 0, "failed": [], "output": "OK"}
+
+    def test_a_failing_suite_refuses_and_writes_nothing(self):
+        with tempfile.TemporaryDirectory() as td:
+            out = pathlib.Path(td) / "seat-kit.zip"
+            with contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaises(SystemExit) as caught:
+                    mk.build(out, tests=lambda: self.FAILED)
+            self.assertFalse(out.exists())
+        self.assertIn("REFUSED", str(caught.exception))
+        self.assertIn("Klass.test_one", str(caught.exception))
+
+    def test_a_passing_suite_builds(self):
+        with tempfile.TemporaryDirectory() as td:
+            out = pathlib.Path(td) / "seat-kit.zip"
+            with contextlib.redirect_stdout(io.StringIO()) as said:
+                mk.build(out, tests=lambda: self.PASSED)
+            self.assertTrue(out.is_file())
+        self.assertIn("120 tests ran, all passed", said.getvalue())
+
+    def test_the_real_runner_is_the_default(self):
+        self.assertIs(mk.build.__defaults__[-1], mk.run_tests)
 
 
 if __name__ == "__main__":

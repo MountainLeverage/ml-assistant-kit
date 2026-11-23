@@ -109,9 +109,18 @@ def places(event):
 
 
 def in_seat(event):
-    """The seat folder if any place this session could be is a seat, else None."""
+    """The seat folder if any place this session could be is a seat, else None. The walk up asks the file system at
+    each level, so a short (8.3) or differently cased spelling finds the same marker; each place is also walked as
+    its real path, so a folder reached through a junction is checked where it really lives."""
     for p in places(event):
         s = seat_of(p)
+        if s:
+            return s
+        try:
+            real = os.path.realpath(p)
+        except Exception:  # noqa: BLE001
+            continue
+        s = seat_of(real) if real != p else None
         if s:
             return s
     return None

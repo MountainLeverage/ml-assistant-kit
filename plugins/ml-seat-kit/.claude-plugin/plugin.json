@@ -1,6 +1,6 @@
 {
   "name": "ml-seat-kit",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "A personal email assistant seat for one person on a Windows laptop. Drafts only: a send gate hook refuses every mail send, reply, forward and calendar RSVP inside a seat folder. A 30 minute check loop (60 at night and weekends) with a STOP file, a ledger, one open-items list, promises-for-later (wakes) and a backup to a folder the person picks. A one-file launcher installs what is missing and opens the seat every day.",
   "author": {
     "name": "Seat kit maintainers"

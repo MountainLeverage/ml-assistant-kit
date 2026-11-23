@@ -45,7 +45,7 @@ def listing(folder):
 class AdoptBase(unittest.TestCase):
     def setUp(self):
         self.td = tempfile.TemporaryDirectory()
-        self.tmp = pathlib.Path(self.td.name) / "with space"
+        self.tmp = _helpers.real(self.td) / "with space"
         self.kit = self.tmp / "kit home"
         (self.kit / "current").mkdir(parents=True)
         self.folder = self.tmp / "Her Folder"
@@ -67,7 +67,7 @@ class AdoptBase(unittest.TestCase):
             raise AssertionError("adopt asked a question: %s" % prompt)
 
         s._claude = fake_claude
-        s.run_self_tests = lambda: (self.tests_ran.append(1), (True, "OK"))[1]
+        s.run_self_tests = lambda *a: (self.tests_ran.append(1), (True, "OK"))[1]
         s.make_shortcut = s.desktop_folder = no_shortcut
         builtins.input = no_question
 
@@ -191,7 +191,7 @@ class Adopt(AdoptBase):
         self.assertEqual((data["model"], data["env"]), (HER_SETTINGS["model"], HER_SETTINGS["env"]))
         self.assertEqual(len(data["hooks"]["PreToolUse"]), 2)
         gate = data["hooks"]["PreToolUse"][1]["hooks"][0]
-        self.assertEqual((gate["command"], gate["onFailure"]), (os.path.abspath(sys.executable), "block"))
+        self.assertEqual((gate["command"], gate["onFailure"]), (s.long_path(sys.executable), "block"))
         self.assertTrue(gate["args"][1].endswith("send_gate.py"))
 
     def test_claude_md_gets_one_block_and_hers_stays_byte_for_byte(self):
@@ -278,7 +278,7 @@ class Adopt(AdoptBase):
     def test_failed_self_tests_change_nothing(self):
         self.her_folder()
         before = listing(self.folder)
-        s.run_self_tests = lambda: (False, "FAILED (failures=1)")
+        s.run_self_tests = lambda *a: (False, "FAILED (failures=1)")
         rc, out = self.run_adopt()
         self.assertEqual(rc, 1)
         self.assertIn("self tests failed", out)
@@ -351,7 +351,7 @@ class Again(AdoptBase):
         rc, out = self.run_adopt()
         self.assertEqual(rc, 0, out)
         self.assertIn("send gate updated", out)
-        self.assertEqual(self.settings()["hooks"]["PreToolUse"][1]["hooks"][0]["command"], os.path.abspath(sys.executable))
+        self.assertEqual(self.settings()["hooks"]["PreToolUse"][1]["hooks"][0]["command"], s.long_path(sys.executable))
         newest = self.backups()[-1]
         self.assertEqual((newest / ".claude" / "settings.json").read_bytes(), stale)
         self.assertEqual((self.folder / "CLAUDE.md").read_bytes(), md)
@@ -584,7 +584,7 @@ class LauncherAdopt(unittest.TestCase):
 
     def setUp(self):
         self.td = tempfile.TemporaryDirectory()
-        self.base = pathlib.Path(self.td.name) / "with space"
+        self.base = _helpers.real(self.td) / "with space"
         self.home = self.base / "home"
         self.store = self.base / "Microsoft" / "WindowsApps"
         self.tools = self.base / "tools"
@@ -632,7 +632,8 @@ class LauncherAdopt(unittest.TestCase):
             with self.subTest(kind):
                 rc, out = self.run_launcher(kind, "adopt", "--check", str(self.folder))
                 self.assertIn("Stopped at step 2", out)
-                self.assertIn("found, not used: " + str(self.store / "python.cmd"), out)
+                seen = [ln.split("found, not used: ", 1)[1] for ln in out.splitlines() if "found, not used: " in ln]
+                self.assertIn(_helpers.norm(self.store / "python.cmd"), [_helpers.norm(p) for p in seen], out)
                 self.assertIn("python.org", out)
                 self.assertFalse((self.base / "winget-ran").exists())
                 self.assertFalse((self.base / "python-ran").exists())

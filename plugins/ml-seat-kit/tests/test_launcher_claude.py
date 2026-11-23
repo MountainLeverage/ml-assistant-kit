@@ -28,7 +28,7 @@ def ps1_lookup():
 class ClaudeLookup(unittest.TestCase):
     def setUp(self):
         self.td = tempfile.TemporaryDirectory()
-        self.base = pathlib.Path(self.td.name) / "with space"
+        self.base = _helpers.real(self.td) / "with space"
         self.home = self.base / "home"
         self.appdata = self.home / "AppData" / "Roaming"
         self.onpath = self.base / "elsewhere"
@@ -73,24 +73,31 @@ class ClaudeLookup(unittest.TestCase):
     def both(self):
         return self.run_cmd(), self.run_ps1()
 
+    def assertFound(self, out, label, path):
+        """'label|path', the path compared after normalizing both sides: `where` and Get-Command give the long
+        spelling, an existence check gives the spelling it was handed."""
+        got_label, _, got_path = out.partition("|")
+        self.assertEqual(got_label, label, out)
+        self.assertEqual(_helpers.norm(got_path), _helpers.norm(path), out)
+
     def test_native_spot_wins(self):
         native = self.touch(self.home / ".local" / "bin" / "claude.exe")
         self.touch(self.appdata / "npm" / "claude.cmd")
         self.touch(self.onpath / "claude.exe")
         for out in self.both():
-            self.assertEqual(out, "native install|" + native)
+            self.assertFound(out, "native install", native)
 
     def test_npm_shim_before_path(self):
         shim = self.touch(self.appdata / "npm" / "claude.cmd")
         self.touch(self.onpath / "claude.exe")
         for out in self.both():
-            self.assertEqual(out, "npm install|" + shim)
+            self.assertFound(out, "npm install", shim)
 
     def test_path_lookup_last(self):
         exe = self.touch(self.onpath / "claude.exe")
         self.touch(self.onpath / "claude")              # npm's extensionless shell shim is never picked
         for out in self.both():
-            self.assertEqual(out.lower(), ("on PATH|" + exe).lower())
+            self.assertFound(out, "on PATH", exe)
 
     def test_none_found(self):
         cmd_out, ps_out = self.both()

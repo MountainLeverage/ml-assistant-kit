@@ -50,6 +50,13 @@ Run these on the folder the person already uses, with her own launcher in it.
 16. `Assistant.cmd adopt --undo "<your folder>"`. Her CLAUDE.md and `.claude\settings.json` are back as they
     were, the marker is gone, and her launcher is untouched.
 
+## Self test only
+
+17. `Assistant.cmd selftest`. It prints steps 1 to 3, then the kit version, the Python version and path, the
+    Windows version, the test counts, and the path of `selftest-last.txt`, and ends with "All self tests
+    passed." Nothing is installed, no assistant folder or shortcut appears, and no session opens. If any test
+    did not pass, send the whole window and that file.
+
 ## What to send back
 
 For each numbered item: passed, failed, or what happened instead. For a failure, the last lines on screen.

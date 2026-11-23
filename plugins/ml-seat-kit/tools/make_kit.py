@@ -10,8 +10,8 @@ marketplace named "seat-kit"):
     Assistant.cmd, Assistant.ps1        the launchers, with KIT_SOURCE filled in when --source is given
 
 Bump the version in plugin.json (and the company marketplace entry) for EVERY zip you hand out: an installed copy
-with the same version is not refreshed. The zip is checked before it is written: every file must pass the kit's
-privacy scan (tests/test_privacy.py), or nothing is written.
+with the same version is not refreshed. The zip is checked before it is written: the kit's whole test suite must
+pass and every file must pass the kit's privacy scan (tests/test_privacy.py), or nothing is written.
 """
 import argparse
 import io
@@ -81,10 +81,33 @@ def require_private_list(words, source, without=False):
         print("WARNING: release build WITHOUT the private name list; names were not scanned for.")
 
 
-def build(out, source=None, without_private_list=False):
+def run_tests():
+    """The kit's whole suite in a fresh python -I, exactly as the self tests run it (seat_setup.run_suite)."""
+    if str(PLUGIN / "scripts") not in sys.path:
+        sys.path.insert(0, str(PLUGIN / "scripts"))
+    import seat_setup   # noqa: E402
+    return seat_setup.run_suite(None, timeout=900)
+
+
+def require_passing(res):
+    """Refuse the build unless every test passed. The names come from unittest's own FAIL and ERROR lines."""
+    if res.get("ok"):
+        return "%s tests ran, all passed (%d skipped)" % (res.get("ran"), res.get("skipped", 0))
+    names = []
+    for _, name, _ in res.get("failed", []):
+        if name not in names:
+            names.append(name)
+    tail = "\n".join((res.get("output") or "").splitlines()[-40:])
+    raise SystemExit("REFUSED: the kit's tests did not all pass, so nothing was written (%s%s).\n%s" % (
+        res.get("summary") or "no result", ": " + ", ".join(names) if names else "", tail))
+
+
+def build(out, source=None, without_private_list=False, tests=run_tests):
     sys.path.insert(0, str(PLUGIN / "tests"))
     import test_privacy   # noqa: E402  (the same scan the tests run)
     require_private_list(test_privacy.private_words(), source, without_private_list)
+    print("running the kit's tests first ...")
+    print(require_passing(tests()))
     version = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))["version"]
     entries = {".claude-plugin/marketplace.json": (json.dumps(marketplace(version), indent=2) + "\n").encode("utf-8")}
     for p in plugin_files():

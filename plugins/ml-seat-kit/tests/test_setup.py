@@ -22,7 +22,7 @@ def args(tmp, ask=False):
 class Setup(unittest.TestCase):
     def setUp(self):
         self.td = tempfile.TemporaryDirectory()
-        self.tmp = pathlib.Path(self.td.name)
+        self.tmp = _helpers.real(self.td)
         (self.tmp / "kit").mkdir()
         self.orig_tick = s.dry_tick
         s.dry_tick = lambda seat: (True, "FREE: test")
@@ -64,7 +64,7 @@ class Setup(unittest.TestCase):
         self.assertFalse((seat / ".claude" / "settings.local.json").exists())
         (entry,) = data["hooks"]["PreToolUse"]
         hook = entry["hooks"][0]
-        self.assertEqual(hook["command"], os.path.abspath(sys.executable))   # the Python setup ran with
+        self.assertEqual(hook["command"], s.long_path(sys.executable))   # the Python setup ran with
         self.assertEqual(hook["onFailure"], "block")
         self.assertEqual(pathlib.Path(hook["args"][1]),
                          (self.tmp / "kit").resolve() / "current/plugins/ml-seat-kit/scripts/send_gate.py")
@@ -82,7 +82,7 @@ class Setup(unittest.TestCase):
         pre = json.loads(p.read_text())["hooks"]["PreToolUse"]
         self.assertEqual(pre[0], hers)
         self.assertEqual(len(pre), 2)
-        self.assertEqual(pre[1]["hooks"][0]["command"], os.path.abspath(sys.executable))
+        self.assertEqual(pre[1]["hooks"][0]["command"], s.long_path(sys.executable))
         _, _, out = self.run_setup()
         self.assertNotIn("settings", out.split("done (", 1)[1])                 # third run: nothing to change
 
@@ -151,7 +151,7 @@ class Setup(unittest.TestCase):
 
     def test_failed_self_tests_stop_setup(self):
         orig = s.run_self_tests
-        s.run_self_tests = lambda: (False, "FAILED (failures=1)")
+        s.run_self_tests = lambda *a: (False, "FAILED (failures=1)")
         a = args(self.tmp)
         a.no_tests = False
         try:

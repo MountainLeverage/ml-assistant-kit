@@ -40,6 +40,32 @@ the same way as before. The send gate applies however the session is started, be
 `.claude\settings.json` with the full path of Python. Adopt needs a Python from python.org: if the only one found
 is the Microsoft Store one, or none, it stops and installs nothing.
 
+## Self test only
+
+To see whether the kit works on a PC without setting anything up, run:
+
+```
+"%USERPROFILE%\Downloads\Assistant.cmd" selftest
+```
+
+It finds Claude Code and Python and gets the kit (steps 1 to 3; it installs nothing, and a Microsoft Store Python
+or no Python stops it with one plain line), then runs the kit's self tests and prints the kit version, the Python
+version and path, the Windows version, how many tests ran, passed, failed and were skipped, each test that did
+not pass with its one-line reason, and where the full output is. It makes no plugin call, creates no assistant
+folder, touches no folder of the person's, makes no shortcut and opens no session. It ends 0 when every test
+passed and 1 otherwise. `Assistant.ps1 selftest` does the same.
+
+Every self test run (this one, the first start and adopt) keeps unittest's full output in
+`%LOCALAPPDATA%\seat-kit\selftest-last.txt`, overwritten each run. When the self tests stop a start or an adopt,
+the stop line names the tests that did not pass (the first three, then "and N more") and that file.
+
+## Short and long spellings of a folder
+
+Windows can give the kit a folder in its 8.3 short form (for a long user name with a dot, TEMP often looks like
+`...\ABCDEF~1.XYZ\AppData\Local\Temp`) or in its long form. The kit never compares two spellings as text: it asks
+the file system (`samefile`, `realpath`). It prints the long form, the one Explorer shows. The launchers print
+step 1's Claude Code path as Windows gave it to them (cmd has no simple way to expand a short name).
+
 ## What each file is
 
 | File | What it does |
@@ -63,7 +89,8 @@ is the Microsoft Store one, or none, it stops and installs nothing.
 ## Where things live on the person's laptop
 
 - Kit: `%LOCALAPPDATA%\seat-kit\current` (the expanded zip, registered as the local marketplace `seat-kit`),
-  plus `python.txt` (the interpreter the launcher found), `last-seat.txt` and a copy of the launcher.
+  plus `python.txt` (the interpreter the launcher found), `last-seat.txt`, `selftest-last.txt` (the last self
+  test output) and a copy of the launcher.
 - Seat: `%USERPROFILE%\Assistant\<assistant name>`: `.seat/seat.json` (the marker; names, backup folder, label
   ids), `state/`, `CLAUDE.md`, `.claude/settings.json` (the send gate hook, plus permission DENY rules for the known
   send tools as a second layer behind it; never an allow rule).
@@ -78,6 +105,7 @@ The code runs from the plugin folder, so a kit update never touches the person's
    you hand out needs a new version, or an installed copy is not refreshed.
 2. `python -I -m unittest discover -s tests -t .` from this folder.
 3. `python -I tools/make_kit.py --out <folder>/seat-kit.zip --source <the https address it will be served from>`.
+   It runs the whole test suite again first and writes nothing if any test fails.
    `--source` fills `KIT_SOURCE` in the launcher copies inside the zip; the copies in this repo keep the
    placeholder. The build refuses to write a zip that fails the privacy scan.
 4. Put the zip at that address, and send the person `Assistant.cmd` with the same address in its `KIT_SOURCE`

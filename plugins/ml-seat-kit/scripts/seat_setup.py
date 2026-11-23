@@ -29,6 +29,13 @@ It keeps her folder, her name, her CLAUDE.md (one fenced hard-limits block appen
 named assistant.cmd or assistant.ps1 is never created, replaced, renamed or deleted). Before any write it copies
 every file it will change into <folder>\\.seat\\backup\\<time>\\ with a manifest of what it creates. No desktop
 shortcut, no session at the end.
+
+Self test mode only runs the kit's self tests and says what it found; it changes nothing but one report file:
+
+    python -I seat_setup.py selftest --kit-home <folder>
+
+Every self test run keeps unittest's full output in <kit-home>\\selftest-last.txt (overwritten each run), and a
+failure names the tests that did not pass and that file.
 """
 import argparse
 import codecs
@@ -37,6 +44,7 @@ import hashlib
 import json
 import os
 import pathlib
+import platform
 import re
 import shutil
 import subprocess
@@ -75,9 +83,40 @@ GATE_MATCHER = ("mcp__.*([Ss]end|SEND|[Rr]eply|REPLY|[Ff]orward|FORWARD|[Rr]espo
                 "|[Ii]nvit|INVIT|[Mm]eeting|MEETING|[Aa]ppointment|APPOINTMENT).*")
 
 
+# ---------------------------------------------------------------- one spelling per folder
+# A folder can arrive in its 8.3 short form (a profile folder shown as ABCDEF~1.XYZ: Windows gives TEMP like that
+# for a long user name with a dot), in its long form, in another case, with a trailing slash, or through a junction.
+# The kit PRINTS the long form (what the person sees in Explorer) and never compares two spellings as strings: it
+# asks the file system (samefile) or compares canon() forms.
+
+def long_path(p):
+    """The long spelling of an existing path (each 8.3 short part expanded, as Explorer names it; junctions are NOT
+    followed), or the absolute path as given when it does not exist or this is not Windows."""
+    s = os.path.abspath(str(p))
+    if os.name == "nt":
+        try:
+            import ctypes
+            buf = ctypes.create_unicode_buffer(32768)
+            n = ctypes.windll.kernel32.GetLongPathNameW(s, buf, 32768)
+            if 0 < n < 32768:
+                return buf.value
+        except Exception:  # noqa: BLE001
+            pass
+    return s
+
+
+def canon(p):
+    """The one spelling used to compare folders: realpath (short names expanded, junctions followed, also for the
+    part that exists of a path that does not) in normal case, with no trailing slash."""
+    try:
+        return os.path.normcase(os.path.realpath(str(p)))
+    except (OSError, ValueError):
+        return os.path.normcase(os.path.abspath(str(p)))
+
+
 def gate_hook(python, kit_home):
     script = pathlib.Path(kit_home).resolve() / "current" / "plugins" / PLUGIN / "scripts" / "send_gate.py"
-    return {"matcher": GATE_MATCHER, "hooks": [{"type": "command", "command": os.path.abspath(python),
+    return {"matcher": GATE_MATCHER, "hooks": [{"type": "command", "command": long_path(python),
                                                 "args": ["-I", str(script)], "timeout": 30, "onFailure": "block"}]}
 
 
@@ -97,9 +136,9 @@ def say(text, end="\n"):
     sys.stdout.flush()
 
 
-def kit_version():
+def kit_version(kit=None):
     try:
-        return json.loads((KIT / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8")).get("version", "?")
+        return json.loads((pathlib.Path(kit or KIT) / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8")).get("version", "?")
     except (OSError, ValueError):
         return "?"
 
@@ -342,15 +381,146 @@ def make_shortcut(desktop, target, seat_name, workdir):
     return True, "made"
 
 
-def run_self_tests():
-    tests = KIT / "tests"
+# ---------------------------------------------------------------- the self tests
+
+SELFTEST_FILE = "selftest-last.txt"
+_RULE_EQ, _RULE_DASH = "=" * 20, "-" * 20
+_TEST_ID = re.compile(r"^(\S+) \(([^()]*)\)(.*)$")
+
+
+def short_test_name(head):
+    """'test_x (tests.test_mod.Klass.test_x) [cmd]' -> 'Klass.test_x [cmd]'. Python 3.9 and 3.10 leave the method off
+    the part in brackets; a module that did not load shows as unittest's _FailedTest."""
+    m = _TEST_ID.match(head.strip())
+    if not m:
+        return head.strip()[:120]
+    method, where, rest = m.groups()
+    parts = [p for p in where.split(".") if p]
+    if parts and parts[-1] == method:
+        parts = parts[:-1]
+    if "_FailedTest" in parts:
+        return "%s (did not load)" % method
+    owner = parts[-1] if parts else ""
+    return ("%s.%s" % (owner, method) if owner and owner != method else method) + rest.rstrip()
+
+
+def parse_unittest(text):
+    """What unittest itself printed: the FAIL and ERROR blocks (name and the one line saying why), the skipped tests
+    (from -v lines), 'Ran N tests' and the last OK or FAILED line. Nothing is guessed: a count unittest did not print
+    stays None."""
+    lines = (text or "").splitlines()
+    failed, skips = [], []
+    i = 0
+    while i < len(lines):
+        head = re.match(r"(FAIL|ERROR): (.*)$", lines[i + 1]) if lines[i].startswith(_RULE_EQ) and i + 1 < len(lines) else None
+        if not head:
+            i += 1
+            continue
+        j = i + 2
+        while j < len(lines) and not lines[j].startswith(_RULE_DASH):   # a docstring line may follow the name
+            j += 1
+        k, reason = j + 1, ""
+        while k < len(lines) and not lines[k].startswith((_RULE_EQ, _RULE_DASH)):
+            ln = lines[k]
+            if not reason and ln.strip() and not ln[0].isspace() and not ln.startswith("Traceback"):
+                reason = ln.strip()[:200]
+            k += 1
+        failed.append((head.group(1), short_test_name(head.group(2)), reason))
+        i = k
+    for n, ln in enumerate(lines):
+        m = re.search(r" \.\.\. skipped '(.*)'$", ln)
+        if not m:
+            continue
+        own = ln[:m.start()]
+        if not _TEST_ID.match(own) and n and _TEST_ID.match(lines[n - 1]):   # a docstring line sat between
+            own = lines[n - 1]
+        skips.append((short_test_name(own), m.group(1)))
+    ran = re.findall(r"^Ran (\d+) tests? in ", text or "", re.M)
+    summary = [ln.strip() for ln in lines if re.match(r"^(OK|FAILED)( \(.*\))?\s*$", ln) or ln.strip() == "NO TESTS RAN"]
+    counts = dict(re.findall(r"(\w+)=(\d+)", summary[-1])) if summary else {}
+    return {"failed": failed, "skips": skips, "ran": int(ran[-1]) if ran else None,
+            "summary": summary[-1] if summary else None,
+            "failures": int(counts.get("failures", 0)), "errors": int(counts.get("errors", 0)),
+            "skipped": int(counts.get("skipped", 0))}
+
+
+def failed_names(res):
+    out = []
+    for _, name, _ in res.get("failed", []):
+        if name not in out:
+            out.append(name)
+    return out
+
+
+def windows_version():
     try:
-        r = subprocess.run([sys.executable, "-I", "-m", "unittest", "discover", "-s", str(tests), "-t", str(KIT)],
-                           capture_output=True, text=True, errors="replace", timeout=300, cwd=str(KIT))
-    except (OSError, subprocess.TimeoutExpired) as e:
-        return False, type(e).__name__
-    tail = _last(r.stderr)
-    return r.returncode == 0, tail
+        parts = [platform.system(), platform.release(), platform.version()]
+        edition = platform.win32_edition() if hasattr(platform, "win32_edition") else None
+        return " ".join(p for p in parts if p) + (" (%s)" % edition if edition else "")
+    except Exception:  # noqa: BLE001
+        return "unknown"
+
+
+def run_suite(kit_home=None, kit=None, timeout=300):
+    """Run the kit's tests in a fresh python -I. Returns parse_unittest's dict plus ok, output, returncode and, when
+    kit_home is given, file (the report path) and file_error (None when it was written)."""
+    kit = pathlib.Path(kit or KIT)
+    cmd = [sys.executable, "-I", "-m", "unittest", "discover", "-v", "-s", str(kit / "tests"), "-t", str(kit)]
+    limit = timeout
+    rc = None
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=limit, cwd=str(kit),
+                           stdin=subprocess.DEVNULL)
+        rc, output = r.returncode, (r.stdout or "") + (r.stderr or "")
+    except subprocess.TimeoutExpired as e:
+        part = [x.decode("utf-8", "replace") if isinstance(x, bytes) else (x or "") for x in (e.stdout, e.stderr)]
+        output = "".join(part) + "\nThe self tests did not finish within %d seconds.\n" % limit
+    except OSError as e:
+        output = "The self tests could not start (%s: %s).\n" % (type(e).__name__, e)
+    res = parse_unittest(output)
+    if rc is None and not res["summary"]:
+        res["summary"] = output.strip().splitlines()[-1] if output.strip() else "no output"
+    res.update(ok=(rc == 0 and bool(res["ran"]) and not res["failures"] and not res["errors"]),
+               output=output, returncode=rc, file=None, file_error=None)
+    if kit_home:
+        res["file"] = pathlib.Path(long_path(kit_home)) / SELFTEST_FILE
+        head = ["Seat kit self tests, %s" % datetime.datetime.now().isoformat(timespec="seconds"),
+                "Kit version: %s" % kit_version(kit),
+                "Python: %s (%s)" % (platform.python_version(), sys.executable),
+                "Windows: %s" % windows_version(),
+                "TEMP: %s" % os.environ.get("TEMP", ""),
+                "Command: %s" % subprocess.list2cmdline(cmd),
+                "Exit code: %s" % ("none (did not finish)" if rc is None else rc), "-" * 70, ""]
+        try:
+            res["file"].write_text("\n".join(head) + output, encoding="utf-8")
+        except OSError as e:
+            res["file_error"] = e.strerror or type(e).__name__
+    return res
+
+
+def self_test_detail(res):
+    """The part of the stop line in brackets: which tests did not pass (first 3, then 'and N more'), and where the
+    full output is, or that it could not be written."""
+    names = failed_names(res)
+    if names:
+        what = "%d did not pass: %s%s" % (len(names), ", ".join(names[:3]),
+                                          " and %d more" % (len(names) - 3) if len(names) > 3 else "")
+    else:
+        what = res.get("summary") or "no test result"
+    if res.get("file") is None:
+        return what
+    if res.get("file_error"):
+        return "%s; the full output could not be written to %s (%s)" % (what, res["file"], res["file_error"])
+    return "%s; full output in %s" % (what, res["file"])
+
+
+def run_self_tests(kit_home=None):
+    """(passed, the detail for a stop line)."""
+    res = run_suite(kit_home)
+    return res["ok"], self_test_detail(res)
+
+
+SELFTEST_TODO = "send this line, and the file it names, to whoever set up your assistant"
 
 
 def dry_tick(seat):
@@ -405,10 +575,9 @@ def setup_seat(args):
     settings = write_settings(seat, gate_hook(sys.executable, args.kit_home))
     notes = []
     if cfg.get("tests_passed_for") != kit_version() and not args.no_tests:
-        ok, tail = run_self_tests()
+        ok, tail = run_self_tests(args.kit_home)
         if not ok:
-            raise Stop(5, "the kit's self tests failed (%s)" % tail,
-                       "do not use the assistant yet; send this line to whoever set up your assistant")
+            raise Stop(5, "the kit's self tests failed (%s)" % tail, "do not use the assistant yet; " + SELFTEST_TODO)
         cfg["tests_passed_for"] = kit_version()
         seat_common.save_config(seat, cfg)
         notes.append("self tests passed")
@@ -425,7 +594,7 @@ def setup_seat(args):
     if made:
         notes.append("%d new files" % len(made))
     notes += ["%s %s" % (k, v) for k, v in (("CLAUDE.md", claude_md), ("settings", settings)) if v != "kept"]
-    say("done (%s; %s)" % (seat, "; ".join(notes)))
+    say("done (%s; %s)" % (long_path(seat), "; ".join(notes)))
     if not cfg.get("first_run_done"):
         say(CHECKLIST.rstrip("\n"))
     return seat, cfg
@@ -487,12 +656,20 @@ def _write(folder, rel, data):
 
 
 def _same(a, b):
-    return os.path.normcase(os.path.abspath(str(a))) == os.path.normcase(os.path.abspath(str(b)))
+    """One folder, however each is spelled: the file system decides when both exist."""
+    try:
+        if os.path.exists(str(a)) and os.path.exists(str(b)):
+            return os.path.samefile(str(a), str(b))
+    except OSError:
+        pass
+    return canon(a) == canon(b)
 
 
 def _inside(child, parent):
-    c, p = os.path.normcase(os.path.abspath(str(child))), os.path.normcase(os.path.abspath(str(parent)))
-    return c == p or c.startswith(p.rstrip("\\/") + os.sep)
+    if _same(child, parent):
+        return True
+    c, p = canon(child), canon(parent)
+    return c.startswith(p.rstrip("\\/") + os.sep)
 
 
 def _resolved(p):
@@ -538,7 +715,8 @@ def adopt_refusal(folder, kit_home, seat_home):
 
 
 def is_store_python(exe):
-    return "\\windowsapps\\" in os.path.normcase(str(exe or "")).replace("/", "\\")
+    """A Microsoft Store Python lives under ...\\WindowsApps\\, which a short spelling hides as WINDOW~1."""
+    return "\\windowsapps\\" in os.path.normcase(long_path(exe) if exe else "").replace("/", "\\")
 
 
 def hard_limits_block():
@@ -801,7 +979,7 @@ def print_check(folder, args, plan):
     say("Never done in adopt mode: a file named assistant.cmd or assistant.ps1 in your folder is never created, "
         "replaced, renamed or deleted; no desktop shortcut; no session opened; nothing renamed; nothing installed.")
     say("")
-    kit_current = pathlib.Path(args.kit_home) / "current"
+    kit_current = pathlib.Path(long_path(args.kit_home)) / "current"
     if kit_current.is_dir():
         say("Outside your folder: to run this check, the launcher put the newest kit into %s (the kit's own folder; "
             "every run of the launcher does this). Nothing else was written: no plugin call, no Claude settings, "
@@ -849,10 +1027,9 @@ def adopt(args):
                    "send this line to whoever set up your assistant")
     version = kit_version()
     if plan["cfg"].get("tests_passed_for") != version and not args.no_tests:
-        ok, tail = run_self_tests()
+        ok, tail = run_self_tests(args.kit_home)
         if not ok:
-            raise Stop(4, "the kit's self tests failed (%s); nothing was changed" % tail,
-                       "send this line to whoever set up your assistant")
+            raise Stop(4, "the kit's self tests failed (%s); nothing was changed" % tail, SELFTEST_TODO)
         say("   The kit's self tests passed.")
     say("Step 5 of 6: putting the kit onto your folder ... ", end="")
     modified, created = _modified_and_created(folder, plan)
@@ -1065,11 +1242,63 @@ def adopt_main(argv):
     return 0
 
 
+class _SelftestArgs(argparse.ArgumentParser):
+    def error(self, message):
+        raise Stop(4, "the selftest line was not understood (%s)" % message, "type it as: Assistant.cmd selftest")
+
+
+def selftest_main(argv):
+    """Read only: run the self tests and print what was found. Writes only <kit-home>\\selftest-last.txt. No plugin
+    call, no seat, no shortcut, no session, no folder of the person's. 0 when every test passed, else 1."""
+    ap = _SelftestArgs(prog="seat_setup.py selftest")
+    ap.add_argument("--kit-home", required=True)
+    try:
+        args = ap.parse_args(argv)
+    except Stop as e:
+        say(str(e))
+        return 1
+    say("Step 4 of 6: running the kit's self tests only (this takes a minute) ... ", end="")
+    res = run_suite(args.kit_home)
+    names = failed_names(res)
+    say("all passed" if res["ok"] else "some did not pass")
+    say("")
+    say("Self test only: nothing was installed or set up, no plugin call was made, and no folder of yours was touched.")
+    say("Kit version:  %s" % kit_version())
+    say("Python:       %s (%s)" % (platform.python_version(), sys.executable))
+    say("Windows:      %s" % windows_version())
+    if res["ran"] is None:
+        say("Tests:        no count from unittest (%s)" % (res["summary"] or "no output"))
+    else:
+        bad = res["failures"] + res["errors"]
+        passed = max(res["ran"] - res["skipped"] - len({n.split(" ")[0] for n in names}), 0)   # subtests: one test
+        say("Tests:        %d ran, %d passed, %d failed, %d skipped" % (res["ran"], passed, bad, res["skipped"]))
+    if names:
+        say("Did not pass:")
+        seen = set()
+        for kind, name, reason in res["failed"]:
+            if name not in seen:
+                seen.add(name)
+                say("  %s: %s" % (name, reason or kind))
+    if res["file_error"]:
+        say("Full output:  could not be written to %s (%s)" % (res["file"], res["file_error"]))
+    else:
+        say("Full output:  %s" % res["file"])
+    say("")
+    if res["ok"]:
+        say("All self tests passed.")
+        return 0
+    say("Some self tests did not pass. Send everything in this window, and the file named above, to whoever set up "
+        "your assistant.")
+    return 1
+
+
 def main(argv=None):
     seat_common.utf8_stdout()
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] == "adopt":
         return adopt_main(argv[1:])
+    if argv and argv[0] == "selftest":
+        return selftest_main(argv[1:])
     ap = argparse.ArgumentParser(prog="seat_setup.py")
     ap.add_argument("--claude", required=True)
     ap.add_argument("--kit-home", required=True)
