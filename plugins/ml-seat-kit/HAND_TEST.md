@@ -97,6 +97,30 @@ remove, instead of "has no remove"); otherwise only the self tests and their sum
     adds up: ran = passed + failed + skipped (an error in a class set up or tear down is named after the counts
     instead). Send the whole window either way.
 
+## The self test's progress and limits (0.1.7)
+
+0.1.7 changes no behavior of setup, adopt or remove; only how the self tests run.
+
+25. `Assistant.cmd selftest`. The first line reads `Step 4 of 6: running the kit's self tests only (this takes several
+    minutes; longer on a PC where security software checks each step) ... `. If the run takes longer than 15
+    seconds, lines like `   still running: test 120 of 224, 3 min 10 s so far` follow, about every 15 seconds, then
+    `Step 4 of 6: all passed` (or `some did not pass`) on its own line. A test running longer than 30 seconds is
+    named on the next such line. On a slow PC, once the run passes ten minutes, one line
+    `   this PC is running the checks slowly, which is expected; if one check is stuck, the run stops by itself and
+    names it` follows the next progress line, only once. A run is stopped only when one step passes its own limit:
+    a test (300 seconds, more for a test that starts launchers or PowerShell: the sum of its programs' time limits),
+    the set-up or tear-down between two classes (300 seconds), finding the tests (300 seconds) or the end of the
+    run after the last test (300 seconds); or, as a backstop for a run that never ends, when the whole run passes
+    three hours. After the `Tests:` line, a line `Not run here: 19 checks of the kit's own test runner, which are
+    run when the kit is built` is expected; those are not failures and not skips.
+    `WholeSuiteUnderShortTemp.test_the_whole_suite_passes_with_a_short_form_temp` is skipped unless this PC's TEMP
+    is a short-form path ("this PC's TEMP is not a short-form path ..."); it is still run for every release, by
+    `make_kit.py`.
+26. Open `%LOCALAPPDATA%\seat-kit\selftest-last.txt`. Its header has `Limits: 300 s per test (a test may ask for
+    more), 300 s to find the tests, 10800 s in all (a backstop)`, a `Job object:` line (`armed (...)` expected; say
+    so if it reads `not armed`) and a `Not run here:` line. Each test has a `SEAT-KIT-TEST-DONE` line with its
+    seconds, and the file ends with "Slowest tests" and "Total by test file". Send the file with the window.
+
 ## What to send back
 
 For each numbered item: passed, failed, or what happened instead. For a failure, the last lines on screen.

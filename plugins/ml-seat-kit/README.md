@@ -93,7 +93,7 @@ An adopted folder is taken back with adopt's own undo (see above):
 ```
 
 Remove never writes into the kit folder. It runs the kit already there when that is the launcher's `KIT_NEED`
-(0.1.6 since 0.1.6) or newer; otherwise it downloads the newest kit to `%TEMP%` and runs it straight from the zip
+(0.1.7 since 0.1.7) or newer; otherwise it downloads the newest kit to `%TEMP%` and runs it straight from the zip
 (`python -I -B <zip> remove ...`), never putting it in place, and deletes the download after. If it cannot get
 that kit and the kit on the PC is older, it stops with one line and prints the five steps to do by hand, exit
 code 1. That line says the kit on the PC is older than the version this launcher needs for remove (since 0.1.6;
@@ -118,7 +118,76 @@ passed and 1 otherwise. `Assistant.ps1 selftest` does the same.
 
 Every self test run (this one, the first start and adopt) keeps unittest's full output in
 `%LOCALAPPDATA%\seat-kit\selftest-last.txt`, overwritten each run. When the self tests stop a start or an adopt,
-the stop line names the tests that did not pass (the first three, then "and N more") and that file.
+the stop line names the tests that did not pass (the first three, then "and N more") and that file. Since 0.1.7 the
+file also has each test's seconds and, at its end, the ten slowest tests and the total by test file (see 0.1.7
+below).
+
+## What changed in 0.1.7
+
+0.1.7 changes no behavior of setup, adopt or remove. It changes how the self tests run, after kit 0.1.6's self
+test on a colleague's PC (Python 3.14.5, security software checking every PowerShell and cmd start) ran into its
+single 600 second limit and said only "The self tests did not finish within 600 seconds.", after ten silent minutes:
+
+- **The self test shows progress.** After the "Step 4 of 6" line (self test), during adopt's self tests and during
+  a first start's step 5, a plain line about every 15 seconds: `   still running: test 120 of 224, 3 min 10 s so
+  far`. A test running longer than 30 seconds is named: `   still running: test 121 of 224
+  (WholeSuiteUnderShortTemp.test_the_whole_suite_passes_with_a_short_form_temp) has taken 45 s; 4 min 2 s so far`.
+  A run that ends within 15 seconds prints none. When the run passes ten minutes, the next progress line is followed,
+  once per run, by `   this PC is running the checks slowly, which is expected; if one check is stuck, the run stops
+  by itself and names it`. When progress
+  lines were printed, the result gets its own line: `Step 4 of 6: all passed` (and a first start's `Step 5 of 6:
+  done (...)`). No line is ever rewritten in place.
+- **It records how long each test took.** The tests run through the kit's own runner
+  (`scripts/selftest_runner.py`), which prints what `unittest discover -v` prints plus one line before and one
+  after every test (`SEAT-KIT-TEST-DONE 37/224 ok 2.41s tests.test_remove...`). `selftest-last.txt` keeps all of it
+  and ends with "Slowest tests" (the ten slowest) and "Total by test file".
+- **It stops a single stuck test and names it.** The limits are there to catch a hang, not to judge speed. Every
+  step of the run has a limit of its own: each test may run 300 seconds, and a test that starts launchers,
+  PowerShell or other programs asks for the sum of its own programs' time limits (`selftest_seconds = N` on that
+  test's method, from 360 seconds up to 2280 seconds for the test that runs both launchers three times each; the
+  release build measures each test's sum in its own run and refuses a build in which any is over the test's
+  limit). Between two classes, the tear-down of the one before and the set-up of the next run back to back and
+  count as one step, under the larger of the two classes' limits (300 seconds for every class today); the tear-down
+  after the last test is a step of its own, and so is the end of the run after it (300 seconds each). Finding and
+  loading the tests may take 300 seconds. On top of these the whole run has a backstop of three hours (10800
+  seconds), for a run that keeps moving and never ends; a real hang is always stopped first by the limit of the
+  step it is in. A run that passes a limit is stopped, and the console says which test: `Tests:        no count from
+  unittest (The self tests were stopped: tests.test_x.Klass.test_y ran longer than 300 seconds (test 37 of 224). 36
+  finished before it.)`, or, when unittest had already printed its counts, a line `Stopped:      The self tests
+  were stopped: ...` after the Tests line. Tests that had already failed before the stop are listed under "Did not
+  pass". The output so far is kept in the file, the Ignored line is still printed, and the exit codes are as before
+  (self test 1; adopt stops with "nothing was changed"; a first start stops at step 5). `make_kit.py` refuses a
+  build in which any test, any set-up, tear-down, finding or end-of-run step, the inner short-TEMP run (against its
+  own total) or the whole run (against the three hours) took more than a quarter of its limit on the build PC. That
+  is room for a CPU four times slower; a fixed delay on every program start (security software) is what the
+  per-test sums above are for.
+- **The checks of the kit's own test runner run when the kit is built, not on your PC.** About twenty tests check
+  the runner and its limits themselves, with real waits, hung tests and programs left running on purpose. They
+  test the kit, not the PC, so a colleague's self test does not load them, and its summary says so on a line of its
+  own: `Not run here: 19 checks of the kit's own test runner, which are run when the kit is built`. They are not
+  counted as run or as skipped, and `selftest-last.txt` names each once (`SEAT-KIT-TEST-NOTRUN` lines).
+  `make_kit.py` runs them (`SEAT_KIT_RELEASE_BUILD=1`) and refuses a build in which any of them did not run.
+- **What the tests started is ended with the run, where Windows allows it.** The runner puts itself in a Windows
+  job object; when that worked, the file's header says `Job object: armed (...)`, and when the runner's own
+  process ends (by itself, or stopped by the self test), Windows ends every program the tests started and left
+  running, and nothing else. A program that broke away from the job is not ended. Where the job could not be made,
+  the header says `Job object: not armed (why)`, such programs keep running, and the self test still finishes: it
+  is done when the runner itself has ended (a few seconds after, for what is left in its output), never when the
+  last leftover program lets go of the output. `SEAT_KIT_TEST_NO_JOB=1` switches the job object off; it is for the
+  kit's own tests only.
+- **The second full run under a short-form TEMP runs only where it can matter.** One test ran the whole suite a
+  second time with TEMP in 8.3 short form; on that PC the limit was hit inside it. It now runs only when the PC's
+  own TEMP or TMP really is a short-form spelling (it differs from its long spelling other than in letter case or
+  a trailing backslash), and skips with that reason everywhere else; the short-spelling code stays covered by the
+  focused tests in `tests/test_short_paths.py`. `make_kit.py` forces it for every build
+  (`SEAT_KIT_FORCE_SHORT_TEMP_RUN=1`).
+- **One test no longer fails on a PC that really has a scanner.** The test that simulates a script scanner planted
+  a log under the real product's folder name, `AppData\Local\Malwarebytes`; on a PC with Malwarebytes the real
+  scanner wrote that folder by itself, so the check that a bare PowerShell start leaves no such folder could not
+  hold. The simulation now uses an invented name no software makes (`SeatKitPretendScanner`), and the same tests
+  run again with a real-looking scanner folder written on every PowerShell start.
+
+Python 3.14 has been run only on that colleague's PC; this kit is developed and tested on 3.12.
 
 ## What changed in 0.1.6
 
@@ -237,7 +306,7 @@ Since 0.1.4 step 3 renames, overwrites and deletes nothing that may be in use, a
    what Windows (or curl) said, and the kit folder.
 
 Each launcher names the oldest kit it runs for self test, adopt and remove (`KIT_NEED` in the `.cmd`, `$KitNeed`
-in the `.ps1`: the kit's own version, 0.1.6 for all three since 0.1.6; `make_kit.py` refuses a zip where they
+in the `.ps1`: the kit's own version, 0.1.7 for all three since 0.1.7; `make_kit.py` refuses a zip where they
 differ). Every mode prints
 `Kit in use: <version> (<folder>)`, read from the kit it is about to run, before running it. Self test and adopt
 run only a kit just put in place and at least that version; otherwise they stop with one line, naming the kit

@@ -13,12 +13,21 @@ registered as a local folder marketplace named "seat-kit"):
     Assistant.cmd, Assistant.ps1        the launchers, with KIT_SOURCE filled in when --source is given
 
 Bump the version in plugin.json (and the company marketplace entry) for EVERY zip you hand out: an installed copy
-with the same version is not refreshed. The zip is checked before it is written: the kit's whole test suite must
-pass and every file must pass the kit's privacy scan (tests/test_privacy.py), or nothing is written.
+with the same version is not refreshed. The zip is checked before it is written, or nothing is written:
+- the kit's whole test suite must pass, run as a release build (SEAT_KIT_RELEASE_BUILD=1: the build-only tests of
+  the kit's own runner run, and every one of them must have run) with the second full run under a short TEMP forced;
+- every test, every set-up, tear-down, finding and end-of-run step, the inner short-TEMP run (against its own
+  total, INNER_TOTAL) and the whole run (against TOTAL_SECONDS) must take at most a quarter of its limit on the build
+  PC (MARGIN, 0.1.7). That is room for a PC whose CPU is four times slower; it does not model a fixed delay added to
+  every process start (security software checking each start), which adds the same seconds to a short test as to a
+  long one. The per-test limits are sized for that separately: each test's limit must be at least the sum of the
+  subprocess time limits it used in this build (measured by the runner, WAITS lines);
+- every file must pass the kit's privacy scan (tests/test_privacy.py).
 """
 import argparse
 import io
 import json
+import os
 import pathlib
 import sys
 import zipfile
@@ -112,11 +121,78 @@ def require_kit_need(version):
 
 
 def run_tests():
-    """The kit's whole suite in a fresh python -I, exactly as the self tests run it (seat_setup.run_suite)."""
+    """The kit's whole suite in a fresh python -I, exactly as the self tests run it (seat_setup.run_suite), with
+    progress lines, and with RELEASE_SUITE set: the build-only tests of the kit's own runner run (and the runner
+    measures each test's subprocess time limits), and the second full run under a short-form TEMP
+    (tests/test_short_paths.py), which runs only where TEMP really is short form, is forced (0.1.7)."""
     if str(PLUGIN / "scripts") not in sys.path:
         sys.path.insert(0, str(PLUGIN / "scripts"))
     import seat_setup   # noqa: E402
-    return seat_setup.run_suite(None, timeout=900)
+    return seat_setup.run_suite(None, progress=seat_setup.say_progress, env=dict(os.environ, **RELEASE_SUITE))
+
+
+FORCE_SHORT_TEMP_RUN = {"SEAT_KIT_FORCE_SHORT_TEMP_RUN": "1"}
+RELEASE_SUITE = dict(FORCE_SHORT_TEMP_RUN, SEAT_KIT_RELEASE_BUILD="1")
+INNER_TEST = "tests.test_short_paths.WholeSuiteUnderShortTemp.test_the_whole_suite_passes_with_a_short_form_temp"
+
+
+def _seat_setup():
+    if str(PLUGIN / "scripts") not in sys.path:
+        sys.path.insert(0, str(PLUGIN / "scripts"))
+    import seat_setup   # noqa: E402
+    return seat_setup
+
+
+def inner_total():
+    """INNER_TOTAL from tests/test_short_paths.py (the inner short-TEMP run's own total), read from its source."""
+    import ast
+    tree = ast.parse((PLUGIN / "tests" / "test_short_paths.py").read_text(encoding="utf-8"))
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and [getattr(t, "id", None) for t in node.targets] == ["INNER_TOTAL"]:
+            return int(ast.literal_eval(node.value))
+    raise SystemExit("REFUSED: tests/test_short_paths.py names no INNER_TOTAL")
+
+
+def require_build_only(res):
+    """Refuse the build unless the build-only tests ran, every one of them: the runner names each it found
+    (BUILDONLY lines); each must have a DONE line that is not "skipped". None found, or any left out here (NOTRUN
+    lines), means the release switch did not reach the runner."""
+    found = res.get("build_only") or []
+    ran = {tid for tid, _, outcome in res.get("times") or [] if outcome != "skipped"}
+    done = [tid for tid in found if tid in ran]
+    if not found or res.get("not_run") or len(done) < len(found):
+        missing = [tid for tid in found if tid not in ran]
+        raise SystemExit("REFUSED: the build-only tests of the kit's own runner did not all run (%d found, %d ran, "
+                         "%d left out as not run here), so nothing was written. They run only with "
+                         "SEAT_KIT_RELEASE_BUILD=1, which this build sets for its suite run.%s" % (
+                             len(found), len(done), len(res.get("not_run") or []),
+                             "\n  did not run: " + "\n  did not run: ".join(missing) if missing else ""))
+    return "%d build-only tests ran, all of them" % len(done)
+
+
+def require_waits(res):
+    """Refuse the build when any test (or set-up and tear-down step) used subprocess time limits that add up to more
+    than its own limit: on a slow PC its limit would stop it while its own programs were still within theirs. The
+    sums come from the runner's WAITS lines, measured in this run; there must be one for every test that ran."""
+    waits = res.get("waits") or []
+    tests = {w[0] for w in waits}
+    unmeasured = [tid for tid, _, _ in res.get("times") or [] if tid not in tests]
+    if not waits or unmeasured:
+        raise SystemExit("REFUSED: the runner did not measure every test's subprocess time limits (%d tests without "
+                         "a WAITS line), so the limits cannot be checked; nothing was written." % len(unmeasured))
+    over = [w for w in waits if w[1] > w[2]]
+    if over:
+        raise SystemExit("REFUSED: %d %s used subprocess time limits adding up to more than %s own limit; nothing was "
+                         "written. Give the test selftest_seconds of at least that sum:\n%s" % (
+                             len(over), "step" if len(over) == 1 else "steps", "its" if len(over) == 1 else "their",
+                             "\n".join("  %d s of time limits under a %d s limit: %s" % (s, lim, what)
+                                       for what, s, lim, _ in over)))
+    what, s, lim, _ = max(waits, key=lambda w: (w[1] / float(w[2] or 1), w[1]))
+    seat_setup = _seat_setup()
+    own = ["  %5d s of time limits under its %d s limit: %s" % (s2, lim2, what2)
+           for what2, s2, lim2, _ in sorted(waits, key=lambda w: -w[2]) if lim2 > seat_setup.PER_TEST_SECONDS]
+    return ("every test's subprocess time limits fit in its own limit (%d measured; closest: %d s of %d s, %s)%s"
+            % (len(waits), s, lim, what, "".join("\n" + ln for ln in own)))
 
 
 def require_passing(res):
@@ -132,12 +208,58 @@ def require_passing(res):
         res.get("summary") or "no result", ": " + ", ".join(names) if names else "", tail))
 
 
+MARGIN = 4   # every step must finish on the build PC within a quarter of its limit (0.1.7; CPU time only)
+PHASE_WORDS = {"find": "finding the tests", "setup": "set-up", "teardown": "tear-down", "end": "end of the run",
+               "after": "between tests"}
+
+
+def require_margin(res, margin=MARGIN, inner=None):
+    """Refuse the build when, measured on the build PC, any of these took more than 1/margin of its limit:
+    - a test (from its DONE line), against the limit it ran under (its START line's: PER_TEST_SECONDS, or what it
+      asked for with selftest_seconds);
+    - a step that is not a test (finding the tests, a set-up, a tear-down, the time between tests, the end of the
+      run after the last test), against the limit the runner's lines gave it;
+    - the inner short-TEMP run (the time of INNER_TEST, which must have run), against INNER_TOTAL;
+    - the whole run, against TOTAL_SECONDS.
+    A slow PC must not be stopped by a limit set for this one."""
+    seat_setup = _seat_setup()
+    limits = res.get("limits") or {}
+    rows = [(t, limits.get(tid, seat_setup.PER_TEST_SECONDS), tid) for tid, t, _ in res.get("times") or []]
+    rows += [(t, lim, "%s%s" % (PHASE_WORDS.get(kind, kind), " (%s)" % name if name else ""))
+             for kind, name, t, lim in res.get("phases") or [] if kind in PHASE_WORDS]
+    if res.get("wall") is not None:
+        rows.append((res["wall"], seat_setup.TOTAL_SECONDS, "the whole run"))
+    if inner is not False:
+        took = [t for tid, t, outcome in res.get("times") or [] if tid == INNER_TEST and outcome == "ok"]
+        if not took:
+            raise SystemExit("REFUSED: the second full run under a short-form TEMP (%s) did not run and pass, so "
+                             "nothing was written." % INNER_TEST)
+        rows.append((took[0], inner or inner_total(), "the inner short-TEMP run, against INNER_TOTAL"))
+    tight = [(t, lim, what) for t, lim, what in rows if t * margin > lim]
+    if tight:
+        raise SystemExit("REFUSED: %d %s took more than a quarter of %s limit on this PC, so a PC %d times slower "
+                         "would be stopped; nothing was written. Raise the limit (to at least %d times its time "
+                         "here) or make it faster:\n%s" % (
+                             len(tight), "step" if len(tight) == 1 else "steps",
+                             "its" if len(tight) == 1 else "their", margin, margin,
+                             "\n".join("  %.1f s of a %d s limit: %s" % (t, lim, what) for t, lim, what in tight)))
+    if not rows:
+        return "no times to check against their limits"
+    t, lim, what = max(rows, key=lambda r: r[0] / float(r[1] or 1))
+    return "every step finished within a quarter of its limit (closest: %.1f s of %d s, %s)" % (t, lim, what)
+
+
 def build(out, source=None, without_private_list=False, tests=run_tests):
     sys.path.insert(0, str(PLUGIN / "tests"))
     import test_privacy   # noqa: E402  (the same scan the tests run)
     require_private_list(test_privacy.private_words(), source, without_private_list)
     print("running the kit's tests first ...")
-    print(require_passing(tests()))
+    res = tests()
+    print(require_passing(res))
+    print((res.get("timing") or "").strip("\n"))
+    print(require_build_only(res))
+    print(require_waits(res))
+    print(require_margin(res))
     version = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))["version"]
     entries = {".claude-plugin/marketplace.json": (json.dumps(marketplace(version), indent=2) + "\n").encode("utf-8"),
                "__main__.py": ZIP_MAIN}

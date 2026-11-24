@@ -20,7 +20,7 @@ $NoInst = if ($Adopt) { 'adopt' } elseif ($SelfTest) { 'selftest' } elseif ($Rem
 $Mode = if ($SelfTest) { 'selftest' } elseif ($Remove) { 'remove' } else { '' }
 if ($Adopt -and ($args -contains '--check')) { $Mode = 'check' } elseif ($Adopt -and ($args -contains '--undo')) { $Mode = 'undo' }
 $KitSource = 'PUT-KIT-ZIP-ADDRESS-HERE'
-$KitNeed = '0.1.6'   # the oldest kit self test, adopt and remove may run: this launcher's own version
+$KitNeed = '0.1.7'   # the oldest kit self test, adopt and remove may run: this launcher's own version
 if ($env:SEAT_KIT_SOURCE) { $KitSource = $env:SEAT_KIT_SOURCE }
 $KitHome = if ($env:SEAT_KIT_HOME) { $env:SEAT_KIT_HOME } else { Join-Path $env:LOCALAPPDATA 'seat-kit' }
 $Seats = if ($env:SEAT_HOME) { $env:SEAT_HOME } else { Join-Path $env:USERPROFILE 'Assistant' }

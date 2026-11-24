@@ -40,8 +40,8 @@ DATED = re.compile(r"^Juniper\.removed-\d{8}-\d{6}$")
 def tree(folder, noise=None):
     """{relative path: sha256, or None for a folder} under folder, leaving out only the top-level AppData folders the
     probe's three PowerShell starts made in a scratch profile on this PC (_helpers.powershell_noise: on the build PC
-    AppData/Local/Microsoft, PowerShell's own caches; on a PC with Malwarebytes expected also
-    AppData/Local/Malwarebytes, its script scanner's log, not yet run on such a PC). PowerShell
+    AppData/Local/Microsoft, PowerShell's own caches; on a colleague's PC with Malwarebytes also
+    AppData/Local/Malwarebytes, its script scanner's log). PowerShell
     runs in these tests whenever the kit makes or reads a shortcut. Anything inside those folders that carries one of
     the kit's own names still counts, and so does everything else."""
     return _helpers.without_noise(test_selftest.tree(folder), _helpers.powershell_noise() if noise is None else noise)
@@ -233,6 +233,7 @@ class Check(Base):
 
 
 class Remove(Base):
+    @_helpers.allow_seconds(540)     # the kit's shortcut 60 + four shortcut reads x 120 = 540 s
     def test_remove_takes_back_a_first_install_and_again_finds_nothing(self):
         seat = self.first_install()
         notes, outside = listing(seat), self.outside("Desktop/Juniper.lnk")
@@ -272,6 +273,7 @@ class Remove(Base):
             self.assertIn(want, lines)
         self.assertEqual(listing(moved), notes)
 
+    @_helpers.allow_seconds(660)     # the kit's shortcut 60 + five shortcut reads x 120 = 660 s
     def test_delete_my_notes_deletes_only_after_the_typed_name_matches(self):
         seat = self.first_install()
         before = tree(self.home)
@@ -305,6 +307,7 @@ class Remove(Base):
         self.assertFalse(seat.exists())
         self.assertFalse(self.kh.exists())
 
+    @_helpers.allow_seconds(780)     # the kit's shortcut 60 + six shortcut reads x 120 = 780 s
     def test_a_failure_midway_says_what_is_done_and_a_second_run_finishes(self):
         seat = self.first_install()
         self.fake.fail = {MREMOVE}
@@ -372,6 +375,7 @@ class Remove(Base):
                 self.assertEqual(tree(self.home), before, ignored(out))
                 self.assertEqual(self.fake.calls, [])
 
+    @_helpers.allow_seconds(660)     # the kit's shortcut 60 + five shortcut reads x 120 = 660 s
     def test_shortcuts_are_known_by_their_target_never_by_name(self):
         self.first_install()
         (self.desk / "Juniper.lnk").unlink()
@@ -488,6 +492,7 @@ class Adopted(Base):
                               input=json.dumps({"tool_name": SEND, "cwd": str(folder), "tool_input": {}}),
                               cwd=str(folder), env=env)
 
+    @_helpers.allow_seconds(360)     # three shortcut reads x 120 = 360 s
     def test_an_adopted_folder_alone_is_never_touched(self):
         self.kit_home(launcher=False)                                       # adopt never keeps a launcher copy
         her = self.base / "Her Folder"
@@ -503,6 +508,7 @@ class Adopted(Base):
                 self.assertIn('adopt --undo "%s"' % her, out)
         self.assertIn("Nothing of a first install was there to take back.", out.splitlines())   # the real run's
 
+    @_helpers.allow_seconds(480)     # the kit's shortcut 60 + two shortcut reads x 120 + three gate starts x 60 = 480 s
     def test_with_both_only_the_first_install_goes_and_the_gate_keeps_working(self):
         seat = self.first_install()
         her = self.base / "Her Folder"
@@ -674,6 +680,8 @@ class RemoveLaunchers(unittest.TestCase):
             out.append(ln.replace("<P>\\home\\Downloads\\Assistant.ps1", "<P>\\home\\Downloads\\Assistant.cmd"))
         return out
 
+    # 2 launchers x (put the zip in place 120 + make the shortcut 120 + three launcher runs x 300) = 2280 s
+    @_helpers.allow_seconds(2280)
     def test_check_then_remove_then_remove_again_with_both_launchers(self):
         seen = {}
         for kind in ("cmd", "ps1"):
@@ -707,6 +715,7 @@ class RemoveLaunchers(unittest.TestCase):
             seen[kind] = [self.masked(P, x) for x in (check, first, again)]
         self.assertEqual(seen["cmd"], seen["ps1"])
 
+    @_helpers.allow_seconds(540)     # put the zip in place 120 + make the shortcut 120 + one launcher run 300 = 540 s
     def test_delete_my_notes_through_the_launcher_asks_for_the_name(self):
         P = self.profile("cmd")
         rc, lines, raw = self.launch(P, "cmd", "remove", "--delete-my-notes", stdin="Juniper\n")
@@ -714,6 +723,7 @@ class RemoveLaunchers(unittest.TestCase):
         self.assertFalse(P.seats.exists(), raw)
         self.assertIn("type its name (Juniper)", raw)
 
+    @_helpers.allow_seconds(540)     # put the zip in place 120 + make the shortcut 120 + one launcher run 300 = 540 s
     def test_the_kept_copy_stops_and_says_to_run_the_downloaded_one(self):
         P = self.profile("cmd")
         before = tree(P.home)
@@ -723,6 +733,7 @@ class RemoveLaunchers(unittest.TestCase):
                       "the copy, with these two lines in a Command Prompt:", lines)
         self.assertEqual((tree(P.home), self.calls(P)), (before, []), ignored(raw))
 
+    @_helpers.allow_seconds(1680)     # four x (put the zip in place 120 + one launcher run 300) = 1680 s
     def test_an_older_kit_and_no_newer_one_stops_with_the_hand_steps(self):
         older = make_zip(self.base / "older.zip", "0.1.4")
         seen = {}
@@ -754,6 +765,7 @@ class RemoveLaunchers(unittest.TestCase):
                 seen.setdefault(kind, []).append([ln.replace(str(P.root), "<P>") for ln in lines])
         self.assertEqual(seen["cmd"], seen["ps1"])
 
+    @_helpers.allow_seconds(840)     # two x (put the zip in place 120 + one launcher run 300) = 840 s
     def test_a_first_install_made_by_0_1_4_is_taken_back_by_the_newer_kit(self):
         for kind in ("cmd", "ps1"):
             P = self.profile("up-" + kind, kit="0.1.4", placed=False)
@@ -764,7 +776,11 @@ class RemoveLaunchers(unittest.TestCase):
             self.assertEqual(self.calls(P), [LIST, MLIST, UNINSTALL, MREMOVE])
 
 
-SYNTHETIC = ["AppData/Local/Malwarebytes", "AppData/Local/Microsoft"]
+# 0.1.7: the simulated scanner has an invented name no software makes, so a test about it holds on a PC that really
+# has a scanner (on a colleague's PC, Malwarebytes wrote AppData/Local/Malwarebytes into every fake profile).
+PRETEND = "AppData/Local/SeatKitPretendScanner"
+PRETEND_LOG = PRETEND + "/Logs/scan.log"
+SYNTHETIC = [PRETEND, "AppData/Local/Microsoft"]
 
 
 def plant(home, rel, text="x"):
@@ -785,7 +801,7 @@ class Noise(unittest.TestCase):
         self.td = tempfile.TemporaryDirectory()
         self.home = _helpers.real(self.td) / "with space" / "home"
         for rel in ("AppData/Local/seat-kit/kit.txt", "AppData/Local/Microsoft/Windows/cache.dat",
-                    "AppData/Local/Malwarebytes/Logs/MBAMSI.log", "AppData/Roaming/Claude/config.json",
+                    "AppData/Local/SeatKitPretendScanner/Logs/scan.log", "AppData/Roaming/Claude/config.json",
                     "Desktop/notes.txt", "Assistant/Juniper/.seat/seat.json"):
             plant(self.home, rel)
 
@@ -793,10 +809,10 @@ class Noise(unittest.TestCase):
         self.td.cleanup()
 
     def test_noise_names_only_top_level_appdata_folders_and_never_the_kits(self):
-        found = ["Local/Microsoft", "Local/Malwarebytes", "Roaming/Thing", "Local/seat-kit", "Local/SEAT-KIT",
+        found = ["Local/Microsoft", "Local/SeatKitPretendScanner", "Roaming/Thing", "Local/seat-kit", "Local/SEAT-KIT",
                  "Local/Programs", "Roaming/npm", "Local/Microsoft/Windows", "Other/x", "Local/", "Local/..", "Desktop"]
         self.assertEqual(_helpers.noise_list(found),
-                         ["AppData/Local/Malwarebytes", "AppData/Local/Microsoft", "AppData/Roaming/Thing"])
+                         ["AppData/Local/Microsoft", "AppData/Local/SeatKitPretendScanner", "AppData/Roaming/Thing"])
 
     @unittest.skipUnless(WIN and os.path.isfile(_helpers.POWERSHELL), "PowerShell")
     def test_the_probe_starts_powershell_three_ways_on_a_fake_profile_and_drops_the_kits_folder(self):
@@ -808,13 +824,13 @@ class Noise(unittest.TestCase):
                          "desk": sorted(os.listdir(env["SEAT_DESK"])) if "SEAT_DESK" in env else None,
                          "script": pathlib.Path(argv[-1]).read_bytes() if "-File" in argv else None})
             local, roaming = pathlib.Path(env["LOCALAPPDATA"]), pathlib.Path(env["APPDATA"])
-            for p in (local / "seat-kit" / "kit.txt", local / "Malwarebytes" / "Logs" / "MBAMSI.log",
+            for p in (local / "seat-kit" / "kit.txt", local / "SeatKitPretendScanner" / "Logs" / "scan.log",
                       local / "Microsoft" / "Windows" / "x", roaming / "Thing" / "y"):
                 p.parent.mkdir(parents=True, exist_ok=True)
                 p.write_text(str(len(seen)), encoding="utf-8")
             (local / "stray.txt").write_text("a file, not a folder", encoding="utf-8")
         self.assertEqual(_helpers.probe_noise(run, sleep=slept.append),
-                         ["AppData/Local/Malwarebytes", "AppData/Local/Microsoft", "AppData/Roaming/Thing"])
+                         ["AppData/Local/Microsoft", "AppData/Local/SeatKitPretendScanner", "AppData/Roaming/Thing"])
         self.assertEqual(slept, [1.0])                                      # one pause after the last start
         self.assertEqual(len(seen), 3)
         ps = _helpers.POWERSHELL
@@ -881,7 +897,7 @@ class Noise(unittest.TestCase):
         def late(seconds):                                                  # a scanner writing just after the exit
             self.assertEqual(seconds, _helpers.PROBE_SETTLE)
             shutil.rmtree(str(homes[-1] / "AppData" / "Local" / "Early"))
-            plant(homes[-1], "AppData/Roaming/Late/MBAMSI.log")
+            plant(homes[-1], "AppData/Roaming/Late/scan.log")
         self.assertEqual(_helpers.probe_noise(run, sleep=late), ["AppData/Local/Early", "AppData/Roaming/Late"])
 
     @unittest.skipUnless(WIN and os.path.isfile(_helpers.POWERSHELL), "PowerShell")
@@ -891,11 +907,11 @@ class Noise(unittest.TestCase):
         def run(argv, **k):
             home = pathlib.Path(k["env"]["USERPROFILE"])
             scratch.append(home.parent)
-            plant(home, "AppData/Local/Malwarebytes/Logs/MBAMSI.log")
+            plant(home, "AppData/Local/SeatKitPretendScanner/Logs/scan.log")
             if not held:                                                    # a scanner keeps its log open
-                held.append(open(str(home / "AppData" / "Local" / "Malwarebytes" / "Logs" / "MBAMSI.log"), "rb"))
+                held.append(open(str(home / "AppData" / "Local" / "SeatKitPretendScanner" / "Logs" / "scan.log"), "rb"))
         try:
-            self.assertEqual(_helpers.probe_noise(run, sleep=lambda s: None), ["AppData/Local/Malwarebytes"])
+            self.assertEqual(_helpers.probe_noise(run, sleep=lambda s: None), ["AppData/Local/SeatKitPretendScanner"])
             self.assertTrue(scratch[0].exists())                            # it could not be removed, and that is all
         finally:
             for h in held:
@@ -907,7 +923,7 @@ class Noise(unittest.TestCase):
             calls.append((path, k))
         shutil.rmtree = no_op
         try:
-            self.assertEqual(_helpers.probe_noise(run, sleep=lambda s: None), ["AppData/Local/Malwarebytes"])
+            self.assertEqual(_helpers.probe_noise(run, sleep=lambda s: None), ["AppData/Local/SeatKitPretendScanner"])
         finally:
             shutil.rmtree = real_rmtree
         self.assertEqual(len(calls), 1)
@@ -929,9 +945,9 @@ class Noise(unittest.TestCase):
 
     def test_a_stray_write_is_still_seen_and_only_the_named_folders_are_ignored(self):
         before = tree(self.home, SYNTHETIC)
-        self.assertNotIn("AppData/Local/Malwarebytes", before)
+        self.assertNotIn("AppData/Local/SeatKitPretendScanner", before)
         self.assertIn("AppData/Local/seat-kit/kit.txt", before)
-        plant(self.home, "AppData/Local/Malwarebytes/Logs/MBAMSI.log", "changed")       # the noise itself
+        plant(self.home, "AppData/Local/SeatKitPretendScanner/Logs/scan.log", "changed")       # the noise itself
         plant(self.home, "AppData/Local/Microsoft/Windows/new.dat")
         self.assertEqual(tree(self.home, SYNTHETIC), before)
         for rel, change in (("AppData/Local/Other/x", "a new folder of someone else's"),
@@ -940,7 +956,7 @@ class Noise(unittest.TestCase):
                             ("AppData/Local/seat-kit/kit.txt", "a change inside the kit's own folder"),
                             ("AppData/Roaming/Microsoft/x", "the same name, but not the folder that was named"),
                             ("AppData/Local/MicrosoftX/x", "a name that only starts like a named one"),
-                            ("AppData/Local/Malwarebytes/Logs/kit.txt", "a kit file name inside a named folder"),
+                            ("AppData/Local/SeatKitPretendScanner/Logs/kit.txt", "a kit file name inside a named folder"),
                             ("AppData/Local/Microsoft/Juniper.lnk", "a shortcut inside a named folder")):
             with self.subTest(change):
                 old = (self.home / rel).read_bytes() if (self.home / rel).exists() else None
@@ -1009,20 +1025,28 @@ def _bare_exit_probe():
 class ColleaguePC(Base):
     """Kit 0.1.5's self test failed on a colleague's PC with Malwarebytes: its script scanner, inside the PowerShell
     the tests start, wrote AppData/Local/Malwarebytes/Logs/MBAMSI.log into the fake profile. Simulated here, in this
-    class only: every PowerShell start that carries script content (-File, or -Command with more than a bare exit)
-    appends to that log in the profile it was given. The kit's own starts all carry script content.
+    class only, under an invented name no software makes (AppData/Local/SeatKitPretendScanner, since 0.1.7: with the
+    real product's name, the bare-exit half failed on a PC that really has it, because the real scanner wrote the
+    same folder by itself): every PowerShell start that carries script content (-File, or -Command with more than a
+    bare exit) appends to that log in the profile it was given. The kit's own starts all carry script content.
 
-    The three *_fails_015_and_passes_016 tests patch the probe's result to report Malwarebytes, so they prove the
-    comparison logic only: the 0.1.5 comparison fails as it did there and the 0.1.6 one passes. The test of the real
-    probe does not patch the probe: it proves the probe reports Malwarebytes from such a scanner, through its
-    script-carrying starts (2 and 3), and that the bare-exit-only first draft would not have. None of these runs the
-    self test summary; the summary lines are tested in test_selftest."""
+    The three *_fails_015_and_passes_016 tests patch the probe's result to report the pretend scanner (and whatever
+    the real probe found on this PC, so a real scanner here is ignored as it is in every other test), so they prove
+    the comparison logic only: the 0.1.5 comparison fails as it did there and the 0.1.6 one passes. The test of the
+    real probe does not patch the probe: it proves the probe reports such a scanner through its script-carrying
+    starts (2 and 3), and that the bare-exit-only first draft would not have. None of these runs the self test
+    summary; the summary lines are tested in test_selftest. ColleaguePCWithARealScanner runs the key ones again on a
+    PC that also has a scanner writing on every PowerShell start."""
+
+    ALWAYS = None   # a folder a real scanner writes on EVERY PowerShell start, bare ones too (the subclass below)
 
     def setUp(self):
         super().setUp()
         self.starts, self.planted = [], []
         real_run, self.saved_run = subprocess.run, subprocess.run
         self.saved_noise = _helpers.powershell_noise
+        here = list(self.saved_noise())          # what the real probe found on this PC (before run is wrapped)
+        always = self.ALWAYS
 
         def run(argv, *a, **k):
             res = real_run(argv, *a, **k)
@@ -1030,16 +1054,19 @@ class ColleaguePC(Base):
             if os.path.basename(str(exe)).lower() in ("powershell", "powershell.exe"):
                 env = k.get("env") or os.environ
                 self.starts.append({v: env.get(v) for v in _helpers.PROFILE_VARS})
+                if always:
+                    plant(env["USERPROFILE"], always + "/Logs/real.log", "scan %d\n" % len(self.starts))
                 if carries_script(argv):
                     self.planted.append(list(argv))
-                    log = pathlib.Path(env["USERPROFILE"]) / "AppData/Local/Malwarebytes/Logs/MBAMSI.log"
+                    log = pathlib.Path(env["USERPROFILE"]) / PRETEND_LOG
                     log.parent.mkdir(parents=True, exist_ok=True)
                     with open(str(log), "a", encoding="utf-8") as f:
                         f.write("scan %d\n" % len(self.starts))
             return res
         subprocess.run = run                                                # the kit calls subprocess.run
         self.addCleanup(setattr, subprocess, "run", self.saved_run)
-        _helpers.powershell_noise = lambda: list(SYNTHETIC)
+        noise = sorted(set(SYNTHETIC) | set(here) | ({always} if always else set()))
+        _helpers.powershell_noise = lambda: list(noise)
         self.addCleanup(setattr, _helpers, "powershell_noise", self.saved_noise)
 
     def test_the_simulation_acts_only_on_script_content(self):
@@ -1053,7 +1080,7 @@ class ColleaguePC(Base):
     @unittest.skipUnless(os.path.isfile(_helpers.POWERSHELL), "PowerShell")
     def test_the_real_probe_reports_a_scanner_that_acts_only_on_script_content(self):
         found = _helpers.probe_noise()                                      # NOT patched: real PowerShell starts
-        self.assertIn("AppData/Local/Malwarebytes", found)
+        self.assertIn("AppData/Local/SeatKitPretendScanner", found)
         self.assertEqual(len(self.starts), 3)
         self.assertEqual([a[3:] if a[3] == "-Command" else a[3:6] for a in self.planted],
                          [["-Command", r.SHORTCUT_PS], ["-ExecutionPolicy", "Bypass", "-File"]])   # runs 2 and 3
@@ -1065,7 +1092,7 @@ class ColleaguePC(Base):
                 self.assertEqual(os.path.commonpath([env[k], home]), home, k)
 
         self.starts, self.planted = [], []
-        self.assertNotIn("AppData/Local/Malwarebytes", _bare_exit_probe())  # the first draft would have missed it
+        self.assertNotIn("AppData/Local/SeatKitPretendScanner", _bare_exit_probe())  # the first draft would have missed it
         self.assertEqual((len(self.starts), self.planted), (2, []))
 
     def assert_only_fake_profiles(self, least=1):
@@ -1075,24 +1102,25 @@ class ColleaguePC(Base):
                 self.assertIsNotNone(v, k)
                 self.assertEqual(os.path.commonpath([v, str(self.home)]), str(self.home), k)
 
+    @_helpers.allow_seconds(360)     # three shortcut reads x 120 = 360 s (here and in the subclass)
     def test_adopted_style_a_new_folder_fails_015_and_passes_016(self):
         her = self.base / "Her Folder"
         self.kit_home(launcher=False)
         adopt_by_hand(her, self.kh)
         old, new = tree_015(self.home), tree(self.home)
-        self.assertNotIn("AppData/Local/Malwarebytes", old)                 # no PowerShell has run yet
+        self.assertNotIn("AppData/Local/SeatKitPretendScanner", old)                 # no PowerShell has run yet
         for extra in (("--check",), ()):
             with self.subTest(extra=extra):
                 rc, out = self.run_remove(*extra)                           # reads the desktop through PowerShell
                 self.assertEqual(rc, 0, out)
                 self.assertNotEqual(tree_015(self.home), old)               # 0.1.5: "Tuples differ" (a new folder)
                 self.assertEqual(tree(self.home), new, ignored(out))
-                self.assertIn("AppData/Local/Malwarebytes", ignored(out))
+                self.assertIn("AppData/Local/SeatKitPretendScanner", ignored(out))
         self.assert_only_fake_profiles(2)
 
     def test_check_style_a_changed_log_fails_015_and_passes_016(self):
         self.first_install()                                                # its shortcut is made through PowerShell
-        self.assertTrue((self.home / "AppData/Local/Malwarebytes/Logs/MBAMSI.log").is_file())
+        self.assertTrue((self.home / "AppData/Local/SeatKitPretendScanner/Logs/scan.log").is_file())
         old, new = tree_015(self.home), tree(self.home)
         rc, out = self.run_remove("--check")
         self.assertEqual(rc, 0, out)
@@ -1113,6 +1141,25 @@ class ColleaguePC(Base):
         self.assertNotEqual(outside_015(), old)
         self.assertEqual(self.outside("Desktop/Juniper.lnk"), new, ignored(out))
         self.assert_only_fake_profiles(2)
+
+
+class ColleaguePCWithARealScanner(ColleaguePC):
+    """0.1.7: the key ColleaguePC tests again, on a PC that ALSO has a real, always-writing scanner: a real-looking
+    folder (named as the real case was) appears in the fake profile on EVERY PowerShell start, bare ones included,
+    and the probe reports it, as on the colleague's PC. The tests about the pretend scanner must hold all the same."""
+
+    ALWAYS = "AppData/Local/Malwarebytes"
+    test_the_simulation_acts_only_on_script_content = None          # pure, nothing about the PC: not run twice
+    test_remove_style_everything_outside_fails_015_and_passes_016 = None   # the adopted and check styles stand for it
+
+    @unittest.skipUnless(os.path.isfile(_helpers.POWERSHELL), "PowerShell")
+    def test_the_real_scanner_is_seen_by_every_probe_and_is_not_the_pretend_one(self):
+        found = _helpers.probe_noise()
+        self.assertIn(self.ALWAYS, found)
+        self.assertIn(PRETEND, found)
+        bare = _bare_exit_probe()                                       # the real one writes on a bare start too
+        self.assertIn(self.ALWAYS, bare)
+        self.assertNotIn(PRETEND, bare)
 
 
 @unittest.skipUnless(WIN, "Windows shortcuts and folders")

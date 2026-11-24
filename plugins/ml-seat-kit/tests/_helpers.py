@@ -10,11 +10,67 @@ import subprocess
 import sys
 import tempfile
 import time
+import unittest
 
 KIT = pathlib.Path(__file__).resolve().parent.parent
 SCRIPTS = KIT / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
+
+
+# ---------------------------------------------------------------- build-only tests (0.1.7)
+# Tests of the kit's own runner and watcher that use real waits and real hung or leftover processes run only in the
+# release build (tools/make_kit.py sets RELEASE_BUILD=1 for its suite run, and refuses a build in which they did not
+# all run). A colleague's self test is there to test the colleague's PC; these are not loaded there at all, so the
+# Tests line counts what really ran and they are named once, as "not run here", never as skipped.
+RELEASE_BUILD = "SEAT_KIT_RELEASE_BUILD"
+BUILD_ONLY_ATTR = "selftest_build_only"     # scripts/selftest_runner.py reads the same name
+SELFTEST_NOT_RUN_HERE = []                  # ids load_tests left out in this process (read by the runner)
+
+
+def build_only(obj):
+    """Decorator for a test method or a TestCase class: run it only in the release build."""
+    setattr(obj, BUILD_ONLY_ATTR, True)
+    return obj
+
+
+def allow_seconds(n):
+    """Decorator for a test method that starts programs: its limit in the self test (selftest_seconds), at least the
+    sum of the subprocess time limits it uses. The release build measures that sum and refuses a build in which it is
+    over the limit (scripts/selftest_runner.py WAITS lines, tools/make_kit.py require_waits)."""
+    def mark(f):
+        f.selftest_seconds = n
+        return f
+    return mark
+
+
+def release_build(environ=None):
+    return (os.environ if environ is None else environ).get(RELEASE_BUILD) == "1"
+
+
+def load_tests(loader, standard_tests, pattern):
+    """unittest's load_tests hook for a test module with build-only tests (`load_tests = _helpers.load_tests`):
+    outside a release build those tests are not loaded, here or under plain `python -m unittest`, and their ids are
+    kept in SELFTEST_NOT_RUN_HERE."""
+    if release_build():
+        return standard_tests
+    keep = unittest.TestSuite()
+    for t in _flat(standard_tests):
+        method = getattr(type(t), getattr(t, "_testMethodName", "") or "", None)
+        if any(getattr(owner, BUILD_ONLY_ATTR, False) is True for owner in (method, type(t))):
+            if t.id() not in SELFTEST_NOT_RUN_HERE:
+                SELFTEST_NOT_RUN_HERE.append(t.id())
+        else:
+            keep.addTest(t)
+    return keep
+
+
+def _flat(suite):
+    for t in suite:
+        if isinstance(t, unittest.TestSuite):
+            yield from _flat(t)
+        else:
+            yield t
 
 
 def real(td):

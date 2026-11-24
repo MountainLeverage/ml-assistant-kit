@@ -627,6 +627,7 @@ class LauncherAdopt(unittest.TestCase):
         self.last = r
         return r.returncode, r.stdout + r.stderr
 
+    @_helpers.allow_seconds(360)     # 2 launcher runs x 180 = 360 s
     def test_store_only_python_stops_and_installs_nothing(self):
         before = listing(self.folder)
         for kind in ("cmd", "ps1"):

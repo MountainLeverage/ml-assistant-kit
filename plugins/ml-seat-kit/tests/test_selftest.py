@@ -110,7 +110,8 @@ def with_noise(source, noise):
     if noise is None:
         return source
     return source.replace("import unittest\n", "import json\nimport sys\nimport unittest\n\nsys.__stdout__.write("
-                          "'\\n%s %%s\\n' %% json.dumps(%r))\n" % (_helpers.NOISE_MARKER, list(noise)), 1)
+                          "'\\n%s %%s\\n' %% json.dumps(%r))\nsys.__stdout__.flush()\n"
+                          % (_helpers.NOISE_MARKER, list(noise)), 1)   # flushed, as powershell_noise does
 
 
 class Patched:
@@ -218,7 +219,7 @@ class Report(unittest.TestCase):
         self.assertEqual(detail, "5 did not pass: Fake.test_b_errors, Fake.test_a_fails, Fake.test_c_fails_docstring "
                                  "and 2 more; full output in %s" % (self.kit_home / "selftest-last.txt"))
         text = (self.kit_home / "selftest-last.txt").read_text(encoding="utf-8")
-        self.assertTrue(text.endswith(res["output"]))
+        self.assertTrue(text.endswith(res["output"] + res["timing"]))   # 0.1.7: the time tables follow the output
         for want in ("Kit version: 9.9.9", "Python: ", "Windows: ", "TEMP: ",
                      "FAIL: test_a_fails", "ERROR: test_b_errors", "Traceback", "Ran 6 tests", "FAILED ("):
             self.assertIn(want, text)

@@ -24,6 +24,7 @@ import send_gate as g
 GATE = str(_helpers.SCRIPTS / "send_gate.py")
 SEND = "mcp__claude_ai_Gmail__send_message"
 CHILD_FLAG = "SEAT_KIT_SHORT_TEMP_RUN"
+load_tests = _helpers.load_tests     # build-only tests are not loaded outside a release build
 
 
 class ShortBase(unittest.TestCase):
@@ -222,6 +223,57 @@ def gate_blocks(spelling):
             os.environ["CLAUDE_PROJECT_DIR"] = old
 
 
+# 0.1.7: the inner whole-suite run goes through the kit's own runner (run_suite), with the same limits per step as any
+# run and a total of its own, INNER_TOTAL. It runs what a colleague's PC runs: the build-only tests are left out
+# (whole_suite drops SEAT_KIT_RELEASE_BUILD; the outer release run has already run them). Measured on the build PC
+# (2026-11-24, last 0.1.7 round): the suite in that shape, 260 tests, took 255 s (plain unittest; the round before,
+# with the build-only tests still inside, the inner run took 339 s). INNER_TOTAL = 2700 s is more than ten times
+# 255 s, and make_kit refuses a build whose inner run, times 4, is over INNER_TOTAL. This test's own limit is
+# INNER_TOTAL + 60 = 2760 s, and the outer run's TOTAL_SECONDS is 10800: inner 2700 < this test's 2760 < outer 10800.
+# Why the INNER run is the one that names a hung test: a hang inside it is stopped by the inner run's limit for the
+# step it is in (300 s for most tests, a test's own sum for the few that ask for more), and in any case by its total,
+# 2700 s after it started; stopping takes at most 30 s (end_process_tree waits up to 30 s for the runner to end) plus
+# 5 s for the pipes (PIPE_GRACE), so the inner run returns its stop line, which names the test that was running, by
+# about 2735 s, before this test's own 2760 s limit. Not named by the inner run only if the inner run itself does
+# not return within those 25 s of slack.
+INNER_TOTAL = 2700
+FORCE_FLAG = "SEAT_KIT_FORCE_SHORT_TEMP_RUN"   # "1": run the whole suite again even here (make_kit.py sets it)
+NOT_SHORT = ("this PC's TEMP is not a short-form path, so the second full run is not needed here (%s=1 runs it "
+             "anyway)" % FORCE_FLAG)
+
+
+def temp_is_short(environ=None):
+    """True when TEMP or TMP, as set, is really a short-form (8.3) spelling: an existing folder whose value differs
+    from its long spelling (GetLongPathNameW, seat_setup.long_path) other than in letter case or a trailing
+    backslash. A junction or a link is not followed by that call, so it never counts as short."""
+    environ = os.environ if environ is None else environ
+    for var in ("TEMP", "TMP"):
+        value = (environ.get(var) or "").strip()
+        if not value or not os.path.isdir(value):
+            continue
+        given = os.path.normcase(os.path.abspath(value)).rstrip("\\/")
+        if given != os.path.normcase(s.long_path(value)).rstrip("\\/"):
+            return True
+    return False
+
+
+def whole_suite(temp, kit=None, **limits):
+    """The kit's whole suite in a child Python whose TEMP and TMP are `temp`, through run_suite, silent (no progress
+    on the person's console). Returns (run_suite's result, why it failed or None)."""
+    env = dict(os.environ, TEMP=temp, TMP=temp)
+    env[CHILD_FLAG] = "1"
+    env.pop(_helpers.RELEASE_BUILD, None)    # the build-only tests ran in the outer run; never again in here
+    limits.setdefault("total", INNER_TOTAL)
+    res = s.run_suite(None, kit=kit or _helpers.KIT, env=env, progress=None, **limits)
+    out = res["output"]
+    if res["stopped"]:
+        return res, "the inner run was stopped: %s\n%s" % (res["stopped"], out[-3000:])
+    bad = [ln for ln in out.splitlines() if ln.startswith(("FAIL:", "ERROR:"))]
+    if (res["returncode"], bad) != (0, []) or "\nOK" not in out:
+        return res, "the inner run did not pass (exit code %s, %s)\n%s" % (res["returncode"], bad, out[-3000:])
+    return res, None
+
+
 class WholeSuiteUnderShortTemp(unittest.TestCase):
     """The regression for the real failure: the whole suite, in a child Python whose TEMP and TMP are the short
     spelling of a folder with a long, dotted name, must pass."""
@@ -229,19 +281,61 @@ class WholeSuiteUnderShortTemp(unittest.TestCase):
     def test_the_whole_suite_passes_with_a_short_form_temp(self):
         if os.environ.get(CHILD_FLAG) == "1":
             self.skipTest("this run is already the short-TEMP run")
+        if not temp_is_short() and os.environ.get(FORCE_FLAG) != "1":    # 0.1.7: only where it can matter
+            self.skipTest(NOT_SHORT)
         with tempfile.TemporaryDirectory(prefix="Long.Temp ") as td:
             short = _helpers.short_form(_helpers.real(td))
             if not short:
                 self.skipTest(_helpers.NO_SHORT_NAMES)
-            env = dict(os.environ, TEMP=short, TMP=short)
-            env[CHILD_FLAG] = "1"
-            r = subprocess.run([sys.executable, "-I", "-m", "unittest", "discover", "-s", str(_helpers.KIT / "tests"),
-                                "-t", str(_helpers.KIT)], capture_output=True, text=True, errors="replace",
-                               timeout=600, env=env, cwd=str(_helpers.KIT), stdin=subprocess.DEVNULL)
-        out = r.stdout + r.stderr
-        bad = [ln for ln in out.splitlines() if ln.startswith(("FAIL:", "ERROR:"))]
-        self.assertEqual((r.returncode, bad), (0, []), out[-3000:])
-        self.assertIn("\nOK", out)
+            res, why = whole_suite(short)
+        self.assertIsNone(why, why)
+        self.assertTrue(res["ok"])
+    test_the_whole_suite_passes_with_a_short_form_temp.selftest_seconds = INNER_TOTAL + 60
+
+    def test_only_a_really_short_form_temp_counts(self):
+        with tempfile.TemporaryDirectory(prefix="Long.Temp ") as td:
+            long_ = str(_helpers.real(td))
+            short = _helpers.short_form(long_)
+            self.assertFalse(temp_is_short({"TEMP": long_, "TMP": long_}))
+            self.assertFalse(temp_is_short({"TEMP": long_.upper() + "\\", "TMP": long_.lower()}))
+            self.assertFalse(temp_is_short({"TEMP": long_ + "\\missing"}))
+            self.assertFalse(temp_is_short({}))
+            if not short:
+                self.skipTest(_helpers.NO_SHORT_NAMES)
+            self.assertTrue(temp_is_short({"TEMP": short, "TMP": long_}))
+            self.assertTrue(temp_is_short({"TEMP": long_, "TMP": short}))
+        self.assertIn("TEMP is not a short-form path, so the second full run is not needed here", NOT_SHORT)
+
+    def test_a_run_under_a_short_form_temp_passes_it_through_intact(self):
+        """What the second full run checked of the runner itself, kept where it is skipped: a suite run through
+        run_suite with a short-form TEMP sees exactly that TEMP, and its temporary folders are made under it."""
+        from tests.test_selftest import fake_kit
+        with tempfile.TemporaryDirectory(prefix="Long.Temp ") as td:
+            short = _helpers.short_form(_helpers.real(td))
+            if not short:
+                self.skipTest(_helpers.NO_SHORT_NAMES)
+            probe = ("import os\nimport tempfile\nimport unittest\n\n\nclass Temp(unittest.TestCase):\n"
+                     "    def test_temp(self):\n        self.assertEqual(os.environ['TEMP'], %r)\n"
+                     "        self.assertEqual(os.environ['TMP'], %r)\n"
+                     "        with tempfile.TemporaryDirectory() as d:\n"
+                     "            self.assertTrue(os.path.normcase(d).startswith(os.path.normcase(%r)), d)\n"
+                     % (short, short, short))
+            res, why = whole_suite(short, kit=fake_kit(_helpers.real(td), probe))
+        self.assertIsNone(why, why)
+        self.assertEqual(res["ran"], 1)
+
+    @_helpers.build_only
+    def test_the_inner_run_names_a_hung_test(self):
+        """A made-up suite stands in for the kit's (a test that hangs), with a per-test limit of seconds."""
+        from tests.test_selftest import fake_kit
+        hung = ("import time\nimport unittest\n\n\nclass Fine(unittest.TestCase):\n    def test_fine(self):\n"
+                "        pass\n\n\nclass Stuck(unittest.TestCase):\n    def test_stuck(self):\n        time.sleep(120)\n")
+        with tempfile.TemporaryDirectory(prefix="Long.Temp ") as td:
+            res, why = whole_suite(str(_helpers.real(td)), kit=fake_kit(_helpers.real(td), hung), per_test=10)
+        self.assertEqual(res["stopped"], "The self tests were stopped: tests.test_fake.Stuck.test_stuck ran longer "
+                                         "than 10 seconds (test 2 of 2). 1 finished before it.")
+        self.assertTrue(why.startswith("the inner run was stopped: The self tests were stopped: "
+                                       "tests.test_fake.Stuck.test_stuck ran longer than 10 seconds"), why)
 
 
 if __name__ == "__main__":

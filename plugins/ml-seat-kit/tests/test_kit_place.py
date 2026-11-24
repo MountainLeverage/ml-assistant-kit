@@ -99,7 +99,7 @@ class Held:
                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                              cwd=str(self.base))
         self.kids.append((p, ready))
-        for _ in range(200):
+        for _ in range(1200):     # up to 60 s for a Python start (was 10 s: too little where each start is scanned)
             if ready.exists() and ready.read_text().strip():
                 return p
             if p.poll() is not None:
@@ -327,6 +327,7 @@ class GateAddress(Base):
         self.assertIn("DENY " + SEND, (self.seat / ".seat" / "logs" / "send_gate.log").read_text(encoding="utf-8"))
         self.assertEqual(self.spawn(READ_EVENTS).returncode, 0)
 
+    @_helpers.allow_seconds(600)     # the zip put in place 120 (in setUp) + eight gate starts x 60 = 600 s
     def test_a_broken_pointer_fails_closed(self):
         for content in (None, b"0.1.9\r\n", b"..\\..\\x\r\n", b"\xff\xfe"):
             with self.subTest(content=content):
@@ -494,6 +495,7 @@ class Launchers(unittest.TestCase):
         (self.kh / "kits" / version / kp.READY).write_text("x\n", encoding="ascii")
         (self.kh / "kit.txt").write_bytes(version.encode("ascii") + b"\r\n")
 
+    @_helpers.allow_seconds(1440)     # 4 cases x 2 launchers x 180 = 1440 s
     def test_every_mode_prints_the_kit_version_before_running_it(self):
         for args, mode in ((("selftest",), "selftest"), (("adopt", "--check", str(self.folder)), "adopt"),
                            (("adopt", str(self.folder)), "adopt"), ((), "start")):
@@ -506,6 +508,7 @@ class Launchers(unittest.TestCase):
                     self.assertEqual(ran, ["%s %s" % (NEED, mode)])
                     self.assertIn("Step 3 of 6: getting the assistant kit ... done", lines)
 
+    @_helpers.allow_seconds(540)     # 2 launchers x (180 + three holder waits x 30) = 540 s
     def test_held_open_old_current_and_her_leftovers_selftest_runs_the_new_kit(self):
         def prepare():
             self.old_current()
@@ -520,6 +523,7 @@ class Launchers(unittest.TestCase):
             self.assertEqual((rc, ran), (0, ["%s selftest" % NEED]), raw)
             self.assertVersionBeforeRun(lines, NEED, "selftest")
 
+    @_helpers.allow_seconds(1440)     # 4 cases x 2 launchers x 180 = 1440 s
     def test_selftest_and_adopt_never_run_an_older_kit_when_the_download_fails(self):
         missing = self.base / "not-there.zip"
         for prepare, old, args in ((self.old_current, "0.1.2", ("selftest",)),
@@ -538,6 +542,7 @@ class Launchers(unittest.TestCase):
                         self.assertIn("   The kit file %s is not there." % missing, lines)
                         self.assertIn("   The kit folder is %s" % self.kh, lines)
 
+    @_helpers.allow_seconds(360)     # 2 launchers x 180 = 360 s
     def test_a_failed_https_download_says_what_curl_said(self):
         """An https address, as the real launcher has, refused on this PC itself (port 9 on 127.0.0.1: nothing
         leaves the PC). curl's own words come on a line of their own; nothing older is run."""
@@ -558,6 +563,7 @@ class Launchers(unittest.TestCase):
                           "used for selftest, so nothing was run." % NEED, lines)
         self.assertEqual(out["cmd"], out["ps1"])
 
+    @_helpers.allow_seconds(360)     # 2 launchers x 180 = 360 s
     def test_a_normal_start_runs_the_kit_it_has_and_says_which(self):
         out = self.both(source=self.base / "not-there.zip", prepare=self.old_current)
         for kind in ("cmd", "ps1"):
@@ -566,6 +572,7 @@ class Launchers(unittest.TestCase):
             self.assertIn("   Using the kit already on this laptop.", lines)
             self.assertVersionBeforeRun(lines, "0.1.2", "start")
 
+    @_helpers.allow_seconds(360)     # 2 launchers x 180 = 360 s
     def test_no_new_folder_possible_stops_selftest(self):
         def prepare():
             self.old_current("0.1.3")
@@ -579,6 +586,7 @@ class Launchers(unittest.TestCase):
             self.assertIn("Stopped at step 3: could not get kit %s, and the kit already on this PC (0.1.3) is never "
                           "used for selftest, so nothing was run." % NEED, lines)
 
+    @_helpers.allow_seconds(720)     # 2 cases x 2 launchers x 180 = 720 s
     def test_a_served_kit_older_than_the_launcher_needs(self):
         older = make_zip(self.base / "older.zip", "0.1.3")
         out = self.both("adopt", "--check", str(self.folder), source=older)
@@ -590,6 +598,7 @@ class Launchers(unittest.TestCase):
         out = self.both(source=older)                                          # a normal start runs it
         self.assertEqual(out["cmd"][3], ["0.1.3 start"])
 
+    @_helpers.allow_seconds(360)     # 2 launchers x 180 = 360 s
     def test_a_kit_from_before_0_1_4_cannot_place_itself(self):
         old_zip = make_zip(self.base / "old-style.zip", "0.1.3", placer=False)
         out = self.both("selftest", source=old_zip, prepare=self.old_current)
@@ -599,6 +608,7 @@ class Launchers(unittest.TestCase):
             self.assertIn("   The kit that was fetched could not put itself in place (a kit older than 0.1.4 cannot).",
                           lines)
 
+    @_helpers.allow_seconds(360)     # 2 launchers x 180 = 360 s
     def test_a_pointer_to_a_missing_folder_stops_a_normal_start(self):
         def prepare():
             self.old_current()
