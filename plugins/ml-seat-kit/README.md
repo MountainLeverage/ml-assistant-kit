@@ -92,10 +92,13 @@ An adopted folder is taken back with adopt's own undo (see above):
 "%USERPROFILE%\Downloads\Assistant.cmd" adopt --undo "C:\Example Folder"
 ```
 
-Remove never writes into the kit folder. It runs the kit already there when that is 0.1.5 or newer; otherwise it
-downloads the newest kit to `%TEMP%` and runs it straight from the zip (`python -I -B <zip> remove ...`), never
-putting it in place, and deletes the download after. If it cannot get kit 0.1.5 and the kit on the PC is older
-(which has no remove), it stops with one line and prints the five steps to do by hand, exit code 1.
+Remove never writes into the kit folder. It runs the kit already there when that is the launcher's `KIT_NEED`
+(0.1.6 since 0.1.6) or newer; otherwise it downloads the newest kit to `%TEMP%` and runs it straight from the zip
+(`python -I -B <zip> remove ...`), never putting it in place, and deletes the download after. If it cannot get
+that kit and the kit on the PC is older, it stops with one line and prints the five steps to do by hand, exit
+code 1. That line says the kit on the PC is older than the version this launcher needs for remove (since 0.1.6;
+before, it said the older kit "has no remove", which was untrue of a 0.1.5 kit: 0.1.5 has remove, but a 0.1.6
+launcher offline does not run it).
 
 ## Self test only
 
@@ -107,14 +110,55 @@ To see whether the kit works on a PC without setting anything up, run:
 
 It finds Claude Code and Python and gets the newest kit (steps 1 to 3; if the newest kit cannot be put in place it stops there and runs no older kit; it installs nothing, and a Microsoft Store Python
 or no Python stops it with one plain line), then runs the kit's self tests and prints the kit version, the Python
-version and path, the Windows version, how many tests ran, passed, failed and were skipped, each test that did
-not pass with its one-line reason, and where the full output is. It makes no plugin call, creates no assistant
+version and path, the Windows version, how many tests ran, passed, failed and were skipped, which folders the
+tests' before-and-after comparisons ignored (see 0.1.6 below), each test that did not pass with its one-line
+reason, and where the full output is. It makes no plugin call, creates no assistant
 folder, touches no folder of the person's, makes no shortcut and opens no session. It ends 0 when every test
 passed and 1 otherwise. `Assistant.ps1 selftest` does the same.
 
 Every self test run (this one, the first start and adopt) keeps unittest's full output in
 `%LOCALAPPDATA%\seat-kit\selftest-last.txt`, overwritten each run. When the self tests stop a start or an adopt,
 the stop line names the tests that did not pass (the first three, then "and N more") and that file.
+
+## What changed in 0.1.6
+
+0.1.6 changes no behavior of setup, adopt or remove, with one exception: the wording of the offline remove stop
+when the kit on the PC is older than the launcher needs (above). Otherwise it changes the self tests and the self
+test summary only, after kit 0.1.5's self test failed on a colleague's PC (198 ran, 12 failures) although the kit
+did nothing wrong:
+
+- **Security software should no longer fail the self test.** Several tests start PowerShell under a made-up
+  profile and compare every file in it before and after. On that PC Malwarebytes, inside such a PowerShell, wrote
+  `AppData\Local\Malwarebytes\Logs\MBAMSI.log` into the made-up profile, so 10 tests saw a folder they did not
+  expect. Each test run now first probes a scratch profile with three PowerShell starts shaped like the kit's own:
+  a bare start, the kit's own read-only desktop script (as remove reads shortcuts) on an empty folder, and a
+  `-File` script the way the `.ps1` launcher is started. It notes which top-level folders appear under
+  `AppData\Local` and `AppData\Roaming`, right after the starts and again a second later, and the comparisons leave
+  out exactly those folders. On the build PC that is `Microsoft` (PowerShell's own caches); on a PC with
+  Malwarebytes `Malwarebytes` is expected as well, but this has not been run on a PC with Malwarebytes. Never the
+  kit's own `seat-kit`, `Programs` or `npm`, and never a file inside an ignored folder that carries one of the
+  kit's own names. Anything else, anywhere in the profile, still fails the test.
+- **The summary names what it ignored, every run:** a line `Ignored:      AppData\Local\Microsoft (folders other
+  programs make whenever PowerShell starts)` (or `Ignored:      nothing`), and, when something other than
+  PowerShell's own folder was found, for example `Also seen and ignored: Malwarebytes`.
+- **The Tests line adds up: ran = passed + failed + skipped.** "failed" and "skipped" count tests, not sub-cases;
+  when sub-cases make unittest's own count larger it is added in words: `198 ran, 189 passed, 9 failed (12
+  failures counting sub-cases), 0 skipped`, or `3 ran, 1 passed, 0 failed, 2 skipped (3 skips counting
+  sub-cases)`. An error in a class or module set up or tear down is not a test: it is not taken off "passed" and
+  is named after the counts, for example `10 ran, 10 passed, 0 failed, 0 skipped; 1 error outside any test
+  (Klass.tearDownClass)`, and the self test still fails. If the counts cannot add up, the line shows unittest's
+  own counts and says so.
+- **Tests no longer hand PowerShell or the launchers the person's real profile variables** (`USERPROFILE`, `HOME`,
+  `LOCALAPPDATA`, `APPDATA`); before, the remove tests faked only `USERPROFILE`. The tests still use the person's
+  real `TEMP` (normally inside the profile), and Windows can find some folders from the registry rather than these
+  variables, so this does not make it impossible for a test to touch the real profile.
+- One launcher test (adopt never installs Claude Code, run with `SystemRoot` pointed at an empty folder) printed
+  nothing at all on that PC, likely stopped by security software. When the launcher prints nothing, the test now
+  runs it again with the real `SystemRoot`: it skips only if that run printed "Step 1 of 6", and fails, with both
+  exit codes, if that run printed nothing either. The branch order is also checked by reading both launchers on
+  every PC.
+
+Python 3.14 has been run only on that colleague's PC (3.14.5); this kit is developed and tested on 3.12.
 
 ## Short and long spellings of a folder
 
@@ -193,7 +237,7 @@ Since 0.1.4 step 3 renames, overwrites and deletes nothing that may be in use, a
    what Windows (or curl) said, and the kit folder.
 
 Each launcher names the oldest kit it runs for self test, adopt and remove (`KIT_NEED` in the `.cmd`, `$KitNeed`
-in the `.ps1`: the kit's own version, 0.1.5 for all three since 0.1.5; `make_kit.py` refuses a zip where they
+in the `.ps1`: the kit's own version, 0.1.6 for all three since 0.1.6; `make_kit.py` refuses a zip where they
 differ). Every mode prints
 `Kit in use: <version> (<folder>)`, read from the kit it is about to run, before running it. Self test and adopt
 run only a kit just put in place and at least that version; otherwise they stop with one line, naming the kit

@@ -60,6 +60,40 @@ class Good(unittest.TestCase):
 '''
 
 
+FIXTURE_SUITE = '''import unittest
+
+
+class Tear(unittest.TestCase):
+    @classmethod
+    def tearDownClass(cls):
+        raise RuntimeError("tear down broke")
+
+    def test_one(self):
+        pass
+
+    def test_two(self):
+        pass
+'''
+
+SUBSKIP_SUITE = '''import unittest
+
+
+class Sub(unittest.TestCase):
+    def test_a(self):
+        for k in ("x", "y"):
+            with self.subTest(k):
+                self.skipTest("not here %s" % k)
+
+    def test_b(self):
+        """Has a docstring."""
+        with self.subTest("z"):
+            self.skipTest("nor here")
+
+    def test_c(self):
+        pass
+'''
+
+
 def fake_kit(base, source):
     kit = pathlib.Path(base) / "fake kit"
     (kit / ".claude-plugin").mkdir(parents=True)
@@ -68,6 +102,15 @@ def fake_kit(base, source):
     (kit / "tests" / "__init__.py").write_text("", encoding="utf-8")
     (kit / "tests" / "test_fake.py").write_text(source, encoding="utf-8")
     return kit
+
+
+def with_noise(source, noise):
+    """A made-up suite that prints the noise marker line as the kit's own tests do (tests/_helpers.powershell_noise),
+    or, with None, prints none (an older kit)."""
+    if noise is None:
+        return source
+    return source.replace("import unittest\n", "import json\nimport sys\nimport unittest\n\nsys.__stdout__.write("
+                          "'\\n%s %%s\\n' %% json.dumps(%r))\n" % (_helpers.NOISE_MARKER, list(noise)), 1)
 
 
 class Patched:
@@ -92,6 +135,59 @@ class Parse(unittest.TestCase):
         self.assertEqual(s.short_test_name("test_x (tests.test_m.Klass.test_x) [cmd]"), "Klass.test_x [cmd]")
         self.assertEqual(s.short_test_name("test_m (unittest.loader._FailedTest.test_m)"), "test_m (did not load)")
         self.assertEqual(s.short_test_name("setUpClass (tests.test_m.Klass)"), "Klass.setUpClass")
+
+    def test_the_noise_line_is_read_bounded_and_may_be_absent(self):
+        m = s.NOISE_MARKER
+        self.assertEqual(m, _helpers.NOISE_MARKER)                          # the tests print what selftest reads
+        self.assertIsNone(s.parse_noise("Ran 3 tests in 0.1s\n\nOK\n"))
+        self.assertIsNone(s.parse_noise("%s not json\n" % m))
+        self.assertEqual(s.parse_noise("x\n%s []\nRan 1 test\n" % m), [])
+        self.assertEqual(s.parse_noise('%s ["AppData/Local/Microsoft", "AppData/Local/seat-kit", "AppData/Local/SEAT-KIT", '
+                                       '"AppData/Local/Microsoft/Windows", "Desktop", "AppData/Roaming/Thing", 7]\n' % m),
+                         ["AppData/Local/Microsoft", "AppData/Roaming/Thing"])
+        # two marker lines (a child suite's, quoted in a failure's text, comes later): the first valid one is kept
+        self.assertEqual(s.parse_noise('%s ["AppData/Local/Microsoft"]\nFAIL: test_short_temp\n  %s x\n'
+                                       '%s ["AppData/Local/Child"]\n' % (m, m, m)), ["AppData/Local/Microsoft"])
+        self.assertEqual(s.parse_noise('%s not json\n%s ["AppData/Local/Microsoft"]\n%s []\n' % (m, m, m)),
+                         ["AppData/Local/Microsoft"])
+        self.assertEqual(s.noise_lines(["AppData/Local/Microsoft", "AppData/Roaming/Thing"]),
+                         ["Ignored:      AppData\\Local\\Microsoft, AppData\\Roaming\\Thing (folders other programs make "
+                          "whenever PowerShell starts)", "Also seen and ignored: Thing"])
+
+    def test_the_tests_line_adds_up(self):
+        def res(ran, skipped, failed, failures=0, errors=0, skips=None, summary="x"):
+            out = {"ran": ran, "skipped": skipped, "failures": failures, "errors": errors, "summary": summary,
+                   "failed": [("FAIL", n, "why") for n in failed]}
+            if skips is not None:
+                out["skips"] = [(n, "why") for n in skips]
+            return out
+        # the colleague's run: 9 tests failed, 12 failures counting sub-cases
+        nine = ["K.t%d" % i for i in range(9)] + ["K.t0 [a]", "K.t0 [b]", "K.t1 [cmd]"]
+        self.assertEqual(s.tests_line(res(198, 0, nine, failures=12)),
+                         "Tests:        198 ran, 189 passed, 9 failed (12 failures counting sub-cases), 0 skipped")
+        self.assertEqual(s.tests_line(res(10, 2, ["K.a", "K.b"], failures=1, errors=1)),
+                         "Tests:        10 ran, 6 passed, 2 failed, 2 skipped")
+        self.assertEqual(s.tests_line(res(None, 0, [])), "Tests:        no count from unittest (x)")
+        # a tearDownClass error with every test passing: not taken off passed, named after the counts
+        self.assertEqual(s.tests_line(res(10, 0, ["K.tearDownClass"], errors=1)),
+                         "Tests:        10 ran, 10 passed, 0 failed, 0 skipped; 1 error outside any test "
+                         "(K.tearDownClass)")
+        self.assertEqual(s.tests_line(res(4, 0, ["K.setUpClass", "test_m.setUpModule", "J.t"], failures=1, errors=2)),
+                         "Tests:        4 ran, 3 passed, 1 failed, 0 skipped; 2 errors outside any test "
+                         "(K.setUpClass, test_m.setUpModule)")
+        # three sub-case skips in two tests: skipped counts tests, so ran = passed + failed + skipped
+        self.assertEqual(s.tests_line(res(3, 3, [], skips=["K.a [x]", "K.a [y]", "K.b [z]"])),
+                         "Tests:        3 ran, 1 passed, 0 failed, 2 skipped (3 skips counting sub-cases)")
+        # a whole class skipped in setUpClass is not one of the tests that ran
+        self.assertEqual(s.tests_line(res(2, 1, [], skips=["S.setUpClass"])),
+                         "Tests:        2 ran, 2 passed, 0 failed, 0 skipped; 1 skip outside any test (S.setUpClass)")
+        # a test with a failing and a skipped sub-case is failed, not also skipped
+        self.assertEqual(s.tests_line(res(2, 1, ["K.a [x]"], failures=1, skips=["K.a [y]"])),
+                         "Tests:        2 ran, 1 passed, 1 failed, 0 skipped")
+        # counts that cannot add up are shown as unittest printed them, and the line says so
+        self.assertEqual(s.tests_line(res(1, 0, ["K.a", "K.b"], failures=2, summary="FAILED (failures=2)")),
+                         "Tests:        1 ran; unittest's own counts: FAILED (failures=2) (these do not add up per "
+                         "test, so they are shown as unittest printed them)")
 
 
 class Report(unittest.TestCase):
@@ -268,12 +364,56 @@ class SelftestMode(unittest.TestCase):
     def test_a_failure_exits_1_and_names_each_test_with_its_reason(self):
         rc, out = self.run_mode(FAKE_SUITE)
         self.assertEqual(rc, 1, out)
-        self.assertIn("Tests:        6 ran, 1 passed, 5 failed, 1 skipped", out)
+        # 0.1.6: failed counts tests (6 = 1 + 4 + 1); test_d_fails's two failing sub-cases make unittest's count 5
+        self.assertIn("Tests:        6 ran, 1 passed, 4 failed (5 failures counting sub-cases), 1 skipped", out)
         for want in ("  Fake.test_a_fails: AssertionError: 1 != 2", "  Fake.test_b_errors: KeyError: 'no such key'",
                      "  Fake.test_d_fails [cmd]: AssertionError: this one failed in cmd",
                      "  Fake.test_d_fails [ps1]: AssertionError: this one failed in ps1"):
             self.assertIn(want, out)
         self.assertIn("Some self tests did not pass", out)
+
+    def test_the_summary_says_what_the_comparisons_ignored_every_run(self):
+        mw = ["AppData/Local/Microsoft", "AppData/Local/Malwarebytes"]
+        for source, noise, want, also in (
+                (PASSING_SUITE, None, "Ignored:      not reported (the tests printed no list of ignored folders)", None),
+                (PASSING_SUITE, [], "Ignored:      nothing", None),
+                (PASSING_SUITE, mw[:1], "Ignored:      AppData\\Local\\Microsoft (folders other programs make "
+                                        "whenever PowerShell starts)", None),
+                (PASSING_SUITE, mw, "Ignored:      AppData\\Local\\Microsoft, AppData\\Local\\Malwarebytes (folders "
+                                    "other programs make whenever PowerShell starts)", "Malwarebytes"),
+                (FAKE_SUITE, mw, "Ignored:      AppData\\Local\\Microsoft, AppData\\Local\\Malwarebytes (folders "
+                                 "other programs make whenever PowerShell starts)", "Malwarebytes")):
+            with self.subTest(noise=noise, failing=source is FAKE_SUITE):
+                rc, out = self.run_mode(with_noise(source, noise))
+                self.assertEqual(rc, 1 if source is FAKE_SUITE else 0, out)
+                lines = out.splitlines()
+                tests = [n for n, ln in enumerate(lines) if ln.startswith("Tests:        ")]
+                self.assertEqual(len(tests), 1, out)
+                self.assertEqual(lines[tests[0] + 1], want, out)                # right after the Tests line
+                if also:
+                    self.assertEqual(lines[tests[0] + 2], "Also seen and ignored: %s" % also, out)
+                self.assertEqual(len([ln for ln in lines if ln.startswith("Also seen and ignored:")]), 1 if also else 0,
+                                 out)
+                self.assertEqual(len([ln for ln in lines if ln.startswith("Ignored:")]), 1, out)
+                self.assertNotIn(s.NOISE_MARKER, out)
+
+    def test_a_tear_down_error_with_every_test_passing_still_fails_and_is_named(self):
+        rc, out = self.run_mode(FIXTURE_SUITE)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("Tests:        2 ran, 2 passed, 0 failed, 0 skipped; 1 error outside any test "
+                      "(Tear.tearDownClass)", out.splitlines())
+        self.assertIn("  Tear.tearDownClass: RuntimeError: tear down broke", out.splitlines())
+        self.assertIn("Some self tests did not pass", out)
+
+    def test_three_sub_case_skips_in_two_tests_count_two_skipped(self):
+        rc, out = self.run_mode(SUBSKIP_SUITE)
+        self.assertEqual(rc, 0, out)
+        (line,) = [ln for ln in out.splitlines() if ln.startswith("Tests:")]
+        # 3 = 1 + 0 + 2; Python 3.11 and newer name each skipped sub-case, so the line adds the count of three
+        self.assertTrue(line.startswith("Tests:        3 ran, 1 passed, 0 failed, 2 skipped"), line)
+        self.assertIn(line[len("Tests:        3 ran, 1 passed, 0 failed, 2 skipped"):],
+                      ("", " (3 skips counting sub-cases)"))
+        self.assertIn("All self tests passed.", out)
 
     def test_a_bad_flag_is_a_plain_line_and_exit_1(self):
         buf = io.StringIO()

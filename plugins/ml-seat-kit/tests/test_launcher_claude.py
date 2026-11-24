@@ -46,7 +46,8 @@ class ClaudeLookup(unittest.TestCase):
     def env(self):
         keep = {k: v for k, v in os.environ.items() if k.upper() in ("SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT",
                                                                        "TEMP", "TMP", "PSMODULEPATH")}
-        keep.update(USERPROFILE=str(self.home), APPDATA=str(self.appdata),
+        keep.update(USERPROFILE=str(self.home), APPDATA=str(self.appdata), HOME=str(self.home),
+                    LOCALAPPDATA=str(self.home / "AppData" / "Local"),   # never the person's own (0.1.6)
                     PATH=os.pathsep.join([os.path.join(ROOT, "System32"), ROOT,
                                           os.path.join(ROOT, r"System32\WindowsPowerShell\v1.0"), str(self.onpath)]))
         return keep

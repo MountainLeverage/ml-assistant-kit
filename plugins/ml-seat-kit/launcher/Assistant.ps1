@@ -20,7 +20,7 @@ $NoInst = if ($Adopt) { 'adopt' } elseif ($SelfTest) { 'selftest' } elseif ($Rem
 $Mode = if ($SelfTest) { 'selftest' } elseif ($Remove) { 'remove' } else { '' }
 if ($Adopt -and ($args -contains '--check')) { $Mode = 'check' } elseif ($Adopt -and ($args -contains '--undo')) { $Mode = 'undo' }
 $KitSource = 'PUT-KIT-ZIP-ADDRESS-HERE'
-$KitNeed = '0.1.5'   # the oldest kit self test, adopt and remove may run: this launcher's own version
+$KitNeed = '0.1.6'   # the oldest kit self test, adopt and remove may run: this launcher's own version
 if ($env:SEAT_KIT_SOURCE) { $KitSource = $env:SEAT_KIT_SOURCE }
 $KitHome = if ($env:SEAT_KIT_HOME) { $env:SEAT_KIT_HOME } else { Join-Path $env:LOCALAPPDATA 'seat-kit' }
 $Seats = if ($env:SEAT_HOME) { $env:SEAT_HOME } else { Join-Path $env:USERPROFILE 'Assistant' }
@@ -158,7 +158,7 @@ if ($Remove) {
       if ($errf) { Remove-Item -Force -ErrorAction SilentlyContinue -LiteralPath $errf }
       Write-Host ''
       if ($have -eq 'none') { Write-Host "Stopped at step 3: could not get kit $KitNeed, which remove needs, and there is no kit on this PC, so nothing was changed." }
-      else { Write-Host "Stopped at step 3: could not get kit $KitNeed, which remove needs, and the kit on this PC ($have) has no remove, so nothing was changed." }
+      else { Write-Host "Stopped at step 3: could not get kit $KitNeed, which remove needs, and the kit on this PC ($have) is older than $KitNeed, the version this launcher needs for remove, so nothing was changed." }
       Write-Host 'What to do: check that you are online and run this again. Or take the first install back by hand, in this order:'
       Write-Host "   1. Close your assistant's window."
       Write-Host '   2. In a Command Prompt, run: claude plugin uninstall ml-seat-kit@seat-kit'

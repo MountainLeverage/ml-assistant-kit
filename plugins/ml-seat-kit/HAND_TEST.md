@@ -83,6 +83,20 @@ Run these last, on a PC with a first install, from the `Assistant.cmd` in Downlo
 23. `Assistant.cmd remove` again. Every step says not there; it ends "Nothing of a first install was there to
     take back." `--delete-my-notes` is not part of this hand test (it deletes the notes for real).
 
+## The self test summary (0.1.6)
+
+0.1.6 changes no behavior of setup, adopt or remove, except the wording of the offline remove stop when the kit on
+the PC is older than the launcher needs (it now says the kit is older than the version the launcher needs for
+remove, instead of "has no remove"); otherwise only the self tests and their summary changed.
+
+24. `Assistant.cmd selftest`. Right after the `Tests:` line there is an `Ignored:` line, for example
+    `Ignored:      AppData\Local\Microsoft (folders other programs make whenever PowerShell starts)`, or
+    `Ignored:      nothing`. On a PC with security software that writes into a PowerShell's profile (Malwarebytes
+    was the case), a second line is expected to name it, `Also seen and ignored: Malwarebytes`, and the tests are
+    expected to pass; this has not yet been run on a PC with Malwarebytes, so say what you saw. The `Tests:` line
+    adds up: ran = passed + failed + skipped (an error in a class set up or tear down is named after the counts
+    instead). Send the whole window either way.
+
 ## What to send back
 
 For each numbered item: passed, failed, or what happened instead. For a failure, the last lines on screen.

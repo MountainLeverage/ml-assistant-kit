@@ -36,7 +36,8 @@ Self test mode only runs the kit's self tests and says what it found; it changes
     python -I seat_setup.py selftest --kit-home <folder>
 
 Every self test run keeps unittest's full output in <kit-home>\\selftest-last.txt (overwritten each run), and a
-failure names the tests that did not pass and that file.
+failure names the tests that did not pass and that file. Since 0.1.6 the summary also names the folders the tests'
+before-and-after comparisons ignored, as the tests themselves reported them (parse_noise).
 
 Remove mode takes back a first install (never an adopted folder); see seat_remove.py:
 
@@ -506,9 +507,9 @@ def parse_unittest(text):
         m = re.search(r" \.\.\. skipped '(.*)'$", ln)
         if not m:
             continue
-        own = ln[:m.start()]
-        if not _TEST_ID.match(own) and n and _TEST_ID.match(lines[n - 1]):   # a docstring line sat between
-            own = lines[n - 1]
+        own = ln[:m.start()].strip()   # a sub-case's line is indented (Python 3.11 and newer)
+        if not _TEST_ID.match(own) and n and _TEST_ID.match(lines[n - 1].strip()):   # a docstring line sat between
+            own = lines[n - 1].strip()
         skips.append((short_test_name(own), m.group(1)))
     ran = re.findall(r"^Ran (\d+) tests? in ", text or "", re.M)
     summary = [ln.strip() for ln in lines if re.match(r"^(OK|FAILED)( \(.*\))?\s*$", ln) or ln.strip() == "NO TESTS RAN"]
@@ -516,7 +517,106 @@ def parse_unittest(text):
     return {"failed": failed, "skips": skips, "ran": int(ran[-1]) if ran else None,
             "summary": summary[-1] if summary else None,
             "failures": int(counts.get("failures", 0)), "errors": int(counts.get("errors", 0)),
-            "skipped": int(counts.get("skipped", 0))}
+            "skipped": int(counts.get("skipped", 0)), "noise": parse_noise(text)}
+
+
+# The one line the kit's tests print (tests/_helpers.py powershell_noise): the AppData folders the tests' PowerShell
+# probe made in a scratch profile on this PC, which their before-and-after folder comparisons leave out (0.1.6).
+NOISE_MARKER = "SEAT-KIT-TEST-NOISE:"
+_NOISE_PATH = re.compile(r'^AppData/(Local|Roaming)/([^/\\:*?"<>|]+)$')
+POWERSHELL_OWN = "AppData/Local/Microsoft"
+
+
+def parse_noise(text):
+    """The folders the tests' comparisons ignored, from their marker line: a list (empty when nothing was found or
+    PowerShell could not run), or None when the tests printed no such line (an older kit, or a run cut short). Only
+    top-level AppData\\Local and AppData\\Roaming names are taken, never the kit's own seat-kit. The FIRST valid
+    marker line is the main run's; a later one (a child suite's, quoted in a failure's text) never replaces it."""
+    for ln in (text or "").splitlines():
+        if not ln.startswith(NOISE_MARKER):
+            continue
+        try:
+            names = json.loads(ln[len(NOISE_MARKER):])
+        except ValueError:
+            continue
+        if isinstance(names, list):
+            return [n for n in names if isinstance(n, str) and _NOISE_PATH.match(n)
+                    and _NOISE_PATH.match(n).group(2).lower() != "seat-kit"]
+    return None
+
+
+def noise_lines(noise):
+    """The self test summary's lines on what the comparisons ignored, printed every run, pass or fail."""
+    if noise is None:
+        return ["Ignored:      not reported (the tests printed no list of ignored folders)"]
+    if not noise:
+        return ["Ignored:      nothing"]
+    lines = ["Ignored:      %s (folders other programs make whenever PowerShell starts)"
+             % ", ".join(n.replace("/", "\\") for n in noise)]
+    others = []
+    for n in noise:
+        name = n.rsplit("/", 1)[1]
+        if n != POWERSHELL_OWN and name not in others:
+            others.append(name)
+    if others:
+        lines.append("Also seen and ignored: %s" % ", ".join(others))
+    return lines
+
+
+FIXTURES = ("setUpClass", "tearDownClass", "setUpModule", "tearDownModule")
+
+
+def _test_of(name):
+    """'Klass.test_x [cmd]' -> 'Klass.test_x' (a test with sub-cases is one test)."""
+    return name.split(" ")[0]
+
+
+def _is_fixture(name):
+    """True for unittest's class and module set up and tear down, which are not tests and are not in 'Ran N'."""
+    return _test_of(name).rsplit(".", 1)[-1] in FIXTURES
+
+
+def tests_line(res):
+    """'Tests: N ran, P passed, F failed, S skipped', where F and S count distinct tests and P is the rest, so
+    N = P + F + S. A failure or error in a class or module set up or tear down is not a test: it is not taken off
+    'passed' and is named in words after the counts (the run still fails). When sub-cases make unittest's own counts
+    larger, those are added in words. When the counts still cannot add up, unittest's own counts are printed as
+    unittest printed them, and the line says so."""
+    if res["ran"] is None:
+        return "Tests:        no count from unittest (%s)" % (res["summary"] or "no output")
+    names = failed_names(res)
+    fixture_bad = [n for n in names if _is_fixture(n)]
+    failed_tests = []
+    for n in names:
+        if not _is_fixture(n) and _test_of(n) not in failed_tests:
+            failed_tests.append(_test_of(n))
+    skip_names = [n for n, _ in res.get("skips", [])]
+    fixture_skips = []
+    for n in skip_names:
+        if _is_fixture(n) and n not in fixture_skips:
+            fixture_skips.append(n)
+    skipped_tests = {_test_of(n) for n in skip_names if not _is_fixture(n)} - set(failed_tests)
+    sub_skips = len([n for n in skip_names if not _is_fixture(n) and _test_of(n) in skipped_tests])
+    skipped = len(skipped_tests)
+    if not skip_names and res["skipped"]:   # no -v lines to name them: unittest's own count
+        skipped = sub_skips = res["skipped"]
+    failed = len(failed_tests)
+    passed = res["ran"] - failed - skipped
+    if passed < 0:
+        return ("Tests:        %d ran; unittest's own counts: %s (these do not add up per test, so they are shown as "
+                "unittest printed them)" % (res["ran"], res["summary"] or "none printed"))
+    bad_raw = res["failures"] + res["errors"] - len(fixture_bad)
+    extra_failed = " (%d failures counting sub-cases)" % bad_raw if bad_raw > failed else ""
+    extra_skipped = " (%d skips counting sub-cases)" % sub_skips if sub_skips > skipped else ""
+    line = "Tests:        %d ran, %d passed, %d failed%s, %d skipped%s" % (res["ran"], passed, failed, extra_failed,
+                                                                         skipped, extra_skipped)
+    if fixture_bad:
+        line += "; %d %s outside any test (%s)" % (len(fixture_bad), "error" if len(fixture_bad) == 1 else "errors",
+                                                   ", ".join(fixture_bad))
+    if fixture_skips:
+        line += "; %d %s outside any test (%s)" % (len(fixture_skips), "skip" if len(fixture_skips) == 1 else "skips",
+                                                   ", ".join(fixture_skips))
+    return line
 
 
 def failed_names(res):
@@ -1367,12 +1467,9 @@ def selftest_main(argv):
     say("Kit version:  %s" % kit_version())
     say("Python:       %s (%s)" % (platform.python_version(), sys.executable))
     say("Windows:      %s" % windows_version())
-    if res["ran"] is None:
-        say("Tests:        no count from unittest (%s)" % (res["summary"] or "no output"))
-    else:
-        bad = res["failures"] + res["errors"]
-        passed = max(res["ran"] - res["skipped"] - len({n.split(" ")[0] for n in names}), 0)   # subtests: one test
-        say("Tests:        %d ran, %d passed, %d failed, %d skipped" % (res["ran"], passed, bad, res["skipped"]))
+    say(tests_line(res))
+    for line in noise_lines(res.get("noise")):
+        say(line)
     if names:
         say("Did not pass:")
         seen = set()

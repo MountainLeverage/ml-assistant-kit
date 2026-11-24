@@ -624,6 +624,7 @@ class LauncherAdopt(unittest.TestCase):
                     "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(LAUNCHER / "Assistant.ps1")] + list(args)
         r = subprocess.run(argv, capture_output=True, text=True, errors="replace", timeout=180,
                            env=env or self.env(), stdin=subprocess.DEVNULL, cwd=str(self.base))
+        self.last = r
         return r.returncode, r.stdout + r.stderr
 
     def test_store_only_python_stops_and_installs_nothing(self):
@@ -647,9 +648,27 @@ class LauncherAdopt(unittest.TestCase):
         fake_root = self.base / "no windows"
         (fake_root / "System32").mkdir(parents=True)
         rc, out = self.run_launcher("cmd", "adopt", "--check", str(self.folder), env=self.env(str(fake_root)))
-        self.assertIn("not found where the kit looks; adopt does not install it", out)
-        self.assertIn("Step 2 of 6", out)
         self.assertFalse((self.base / "kit home" / "install-claude.cmd").exists())
+        if not self.last.stdout.strip() and not self.last.stderr.strip():
+            # 0.1.6: on a colleague's PC this run printed nothing at all, not even "Step 1 of 6" (the same launcher
+            # with the real SystemRoot passed there). Security software stopping a cmd.exe whose SystemRoot points
+            # elsewhere is the likely cause. Skip only when a control run of the same launcher, same fake profile and
+            # mode, with the REAL SystemRoot and windir, does print "Step 1 of 6": a launcher that dies silently
+            # everywhere fails here. The control run has the empty claude.exe stand-in back, so step 1 finds it and
+            # the control can never reach the installer download.
+            (self.home / ".local" / "bin" / "claude.exe").write_bytes(b"")
+            control_rc, control = self.run_launcher("cmd", "adopt", "--check", str(self.folder), env=self.env())
+            self.assertFalse((self.base / "kit home" / "install-claude.cmd").exists())
+            if "Step 1 of 6" not in control:
+                self.fail("the launcher printed nothing with SystemRoot redirected (exit code %s), and nothing with "
+                          "the real SystemRoot either (exit code %s):\n%s" % (rc, control_rc, control))
+            self.skipTest("the launcher printed nothing with SystemRoot redirected (exit code %s) but did run with the "
+                          "real SystemRoot (exit code %s); security software may have stopped it; the branch order is "
+                          "checked by test_not_found_branch_comes_before_the_installer_and_jumps_past_it"
+                          % (rc, control_rc))
+        said = "exit code %s\nstdout:\n%s\nstderr:\n%s" % (rc, self.last.stdout, self.last.stderr)
+        self.assertIn("not found where the kit looks; adopt does not install it", out, said)
+        self.assertIn("Step 2 of 6", out, said)
 
     def test_adopt_branches_open_no_session(self):
         cmd = (LAUNCHER / "Assistant.cmd").read_bytes().decode("utf-8").replace("\r\n", "\n")
@@ -662,6 +681,72 @@ class LauncherAdopt(unittest.TestCase):
         self.assertIn("'adopt'", block)
         self.assertIn("return", block)
         self.assertNotIn("-n ", block)
+
+
+@unittest.skipUnless(sys.platform == "win32", "Windows launchers")
+class SilentLauncher(unittest.TestCase):
+    """0.1.6 review: the empty-output skip in test_adopt_never_installs_claude_code fires only when the control run
+    with the real SystemRoot printed "Step 1 of 6"; a launcher silent in both runs fails. The two runs are scripted
+    here (nothing is started), since a silent launcher cannot be produced on demand."""
+
+    def outcome(self, *outputs):
+        said = list(outputs)
+
+        class Scripted(LauncherAdopt):
+            def run_launcher(self, kind, *args, env=None):
+                text = said.pop(0)
+                self.last = subprocess.CompletedProcess([kind], 7 if not text else 0, text, "")
+                return self.last.returncode, text
+        result = unittest.TestResult()
+        Scripted("test_adopt_never_installs_claude_code").run(result)
+        return result, said
+
+    def test_silent_with_a_redirected_root_only_skips(self):
+        result, left = self.outcome("", "Step 1 of 6: checking for Claude Code ... found\n")
+        self.assertEqual((len(result.skipped), result.failures, result.errors, left), (1, [], [], []))
+        self.assertIn("did run with the real SystemRoot", result.skipped[0][1])
+
+    def test_silent_with_the_real_root_too_fails_with_both_exit_codes(self):
+        result, left = self.outcome("", "")
+        self.assertEqual((len(result.failures), result.skipped, left), (1, [], []))
+        self.assertIn("(exit code 7), and nothing with the real SystemRoot either (exit code 7)", result.failures[0][1])
+
+    def test_output_with_a_redirected_root_runs_no_control(self):
+        result, left = self.outcome("Step 1 of 6: checking for Claude Code ... not found where the kit looks; adopt "
+                                    "does not install it\nStep 2 of 6\n", "never used")
+        self.assertEqual((result.skipped, result.failures, result.errors, left), ([], [], [], ["never used"]))
+
+
+class LauncherBranches(unittest.TestCase):
+    """0.1.6: the launchers' own text, read on any PC: the no-install branch for Claude Code."""
+
+    def test_not_found_branch_comes_before_the_installer_and_jumps_past_it(self):
+        """Read, not run (so it holds on every PC): in both launchers, adopt, selftest and remove say Claude Code was
+        not found and go on to step 2 BEFORE the line that downloads the Claude Code installer."""
+        cmd = (LAUNCHER / "Assistant.cmd").read_bytes().decode("utf-8").replace("\r\n", "\n").split("\n")
+        for mode in ("adopt", "selftest", "remove"):
+            self.assertIn('if /i "%%~1"=="%s" set "%s=1" & set "NOINST=%s"' % (mode, mode.upper(), mode),
+                          "\n".join(cmd))
+        branch = cmd.index("if defined NOINST echo not found where the kit looks; %NOINST% does not install it& "
+                           "goto step2")
+        curl = [n for n, ln in enumerate(cmd) if "curl.exe" in ln and "claude.ai/install.cmd" in ln]
+        self.assertEqual(len(curl), 1, "one installer download line")
+        self.assertLess(branch, curl[0])
+        self.assertLess(curl[0], cmd.index(":step2"))                       # the goto jumps past the download
+        self.assertFalse(any("goto" in ln and "step2" not in ln for ln in cmd[branch:curl[0]]))
+        self.assertEqual(cmd[branch + 1:curl[0]], [])                       # nothing, no label or goto, in between
+        ps1 = (LAUNCHER / "Assistant.ps1").read_bytes().decode("utf-8").replace("\r\n", "\n").split("\n")
+        self.assertIn("$NoInst = if ($Adopt) { 'adopt' } elseif ($SelfTest) { 'selftest' } elseif ($Remove) "
+                      "{ 'remove' } else { '' }", ps1)
+        branch = ps1.index('elseif ($NoInst) { Write-Host "not found where the kit looks; $NoInst does not install it" }')
+        curl = [n for n, ln in enumerate(ps1) if "$Curl" in ln and "claude.ai/install.cmd" in ln]
+        self.assertEqual(len(curl), 1, "one installer download line")
+        self.assertLess(branch, curl[0])
+        self.assertEqual(ps1[branch + 1], "else {")                         # the download is only in the else
+        self.assertEqual(ps1[branch + 1:curl[0]], ["else {"])               # and nothing else lies in between
+        self.assertLess(curl[0], ps1.index("Write-Host -NoNewline 'Step 2 of 6: checking for Python ... '"))
+        closing = ps1.index("}", branch + 1)
+        self.assertLess(curl[0], closing)                                   # inside that else block
 
 
 if __name__ == "__main__":

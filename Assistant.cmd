@@ -25,7 +25,7 @@ if /i "%~1"=="remove" set "REMOVE=1" & set "NOINST=remove" & set "MODE=remove"
 if defined ADOPT for %%a in (%*) do if /i "%%~a"=="--check" set "MODE=check"
 if defined ADOPT for %%a in (%*) do if /i "%%~a"=="--undo" set "MODE=undo"
 set "KIT_SOURCE=https://github.com/MountainLeverage/ml-assistant-kit/releases/latest/download/seat-kit.zip"
-set "KIT_NEED=0.1.5"
+set "KIT_NEED=0.1.6"
 if defined SEAT_KIT_SOURCE set "KIT_SOURCE=%SEAT_KIT_SOURCE%"
 set "KIT_HOME=%LOCALAPPDATA%\seat-kit"
 if defined SEAT_KIT_HOME set "KIT_HOME=%SEAT_KIT_HOME%"
@@ -196,7 +196,7 @@ if defined ERRF if exist "%ERRF%" for /f "usebackq delims=" %%l in ("%ERRF%") do
 if defined RMZIP del /q "%RMZIP%" 2>nul
 if defined ERRF del /q "%ERRF%" 2>nul
 set "LINE=Stopped at step 3: could not get kit %KIT_NEED%, which remove needs, and there is no kit on this PC, so nothing was changed."
-if not "%HAVE%"=="none" set "LINE=Stopped at step 3: could not get kit %KIT_NEED%, which remove needs, and the kit on this PC (%HAVE%) has no remove, so nothing was changed."
+if not "%HAVE%"=="none" set "LINE=Stopped at step 3: could not get kit %KIT_NEED%, which remove needs, and the kit on this PC (%HAVE%) is older than %KIT_NEED%, the version this launcher needs for remove, so nothing was changed."
 echo.
 echo %LINE%
 echo What to do: check that you are online and run this again. Or take the first install back by hand, in this order:
