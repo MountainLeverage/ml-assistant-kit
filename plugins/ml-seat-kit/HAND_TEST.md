@@ -67,6 +67,22 @@ Run these on the folder the person already uses, with her own launcher in it.
     folder on lines of their own, then "Stopped at step 3: could not get kit 0.1.4 ..." naming the kit already
     on the PC. Nothing else runs. Turn the network back on.
 
+## Taking a first install back (0.1.5)
+
+Run these last, on a PC with a first install, from the `Assistant.cmd` in Downloads, with the assistant closed.
+
+20. `Assistant.cmd remove --check`. It names the desktop shortcut, the assistant's folder (and the dated name it
+    would be moved to), each thing in the kit folder, and what it leaves. Nothing changes: the shortcut still
+    starts the assistant, and `claude plugin list` still shows `ml-seat-kit`.
+21. Start the assistant, leave its window open, and run `Assistant.cmd remove`. It stops at step 4 saying the
+    assistant's folder is in use and to close the assistant's window, and nothing is changed. Close the window.
+22. `Assistant.cmd remove`. Steps 1 to 4 each say done; step 6 says nothing of the first install is left. Then:
+    `claude plugin list` no longer shows `ml-seat-kit`, the shortcut is gone, `%LOCALAPPDATA%\seat-kit` is gone,
+    and `%USERPROFILE%\Assistant\<name>.removed-<date>-<time>` holds every note (open the open-items list).
+    Claude Code still opens and is still signed in, with its connectors.
+23. `Assistant.cmd remove` again. Every step says not there; it ends "Nothing of a first install was there to
+    take back." `--delete-my-notes` is not part of this hand test (it deletes the notes for real).
+
 ## What to send back
 
 For each numbered item: passed, failed, or what happened instead. For a failure, the last lines on screen.

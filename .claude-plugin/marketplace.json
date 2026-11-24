@@ -8,7 +8,7 @@
     {
       "name": "ml-seat-kit",
       "source": "./plugins/ml-seat-kit",
-      "version": "0.1.4",
+      "version": "0.1.5",
       "category": "productivity",
       "description": "A drafts-only personal email assistant seat for one person."
     }

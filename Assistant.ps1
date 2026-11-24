@@ -8,14 +8,19 @@
 #   adopt --undo "<your folder>"
 # Self test mode only runs the kit's self tests and says what it found (installs nothing, sets nothing up):
 #   selftest
+# Remove mode takes back a first install (never an adopted folder). Run it from the copy you downloaded:
+#   remove --check   (shows what it would take away and what it would leave; changes nothing)
+#   remove           (does it; your assistant's folder is moved aside, not deleted, unless you add
+#                     --delete-my-notes and type its name)
 & {
 $Adopt = ($args.Count -gt 0 -and $args[0] -eq 'adopt')
 $SelfTest = ($args.Count -gt 0 -and $args[0] -eq 'selftest')
-$NoInst = if ($Adopt) { 'adopt' } elseif ($SelfTest) { 'selftest' } else { '' }
-$Mode = if ($SelfTest) { 'selftest' } else { '' }
+$Remove = ($args.Count -gt 0 -and $args[0] -eq 'remove')
+$NoInst = if ($Adopt) { 'adopt' } elseif ($SelfTest) { 'selftest' } elseif ($Remove) { 'remove' } else { '' }
+$Mode = if ($SelfTest) { 'selftest' } elseif ($Remove) { 'remove' } else { '' }
 if ($Adopt -and ($args -contains '--check')) { $Mode = 'check' } elseif ($Adopt -and ($args -contains '--undo')) { $Mode = 'undo' }
 $KitSource = 'https://github.com/MountainLeverage/ml-assistant-kit/releases/latest/download/seat-kit.zip'
-$KitNeed = '0.1.4'   # the oldest kit self test and adopt may run: this launcher's own version
+$KitNeed = '0.1.5'   # the oldest kit self test, adopt and remove may run: this launcher's own version
 if ($env:SEAT_KIT_SOURCE) { $KitSource = $env:SEAT_KIT_SOURCE }
 $KitHome = if ($env:SEAT_KIT_HOME) { $env:SEAT_KIT_HOME } else { Join-Path $env:LOCALAPPDATA 'seat-kit' }
 $Seats = if ($env:SEAT_HOME) { $env:SEAT_HOME } else { Join-Path $env:USERPROFILE 'Assistant' }
@@ -24,7 +29,7 @@ $Native = Join-Path $env:USERPROFILE '.local\bin\claude.exe'
 $Claude = $Native
 $Placeholder = 'PUT-KIT-ZIP-' + 'ADDRESS-HERE'
 $Curl = Join-Path $env:SystemRoot 'System32\curl.exe'
-New-Item -ItemType Directory -Force -Path $KitHome | Out-Null
+if (-not $Remove) { New-Item -ItemType Directory -Force -Path $KitHome | Out-Null }
 function Stop-Seat($n, $why, $todo) {
   Write-Host ''; Write-Host "Stopped at step ${n}: $why."; Write-Host "What to do: $todo"
   try { [void](Read-Host 'Press Enter to close') } catch { }
@@ -109,6 +114,78 @@ $PyDir = Split-Path -Parent $Py
 Write-Host -NoNewline 'Step 3 of 6: getting the assistant kit ... '
 $rc3 = $null; $whyKit = $null; $kitDir = $null; $kv = $null; $kok = $null
 $tok = '{0}' -f (Get-Random)
+if ($Remove) {
+  # Remove never writes into the kit folder. It runs the kit already there when that is $KitNeed or newer, and
+  # otherwise the newest kit straight from the download, never put in place (the download is deleted after).
+  $verOf = {
+    param($p)
+    $o = @(& $Py -I -c "import json,re,sys,zipfile;p=sys.argv[1];m='plugins/ml-seat-kit/.claude-plugin/plugin.json';v=json.loads(zipfile.ZipFile(p).read(m) if zipfile.is_zipfile(p) else open(p+'/'+m,'rb').read())['version'];t=lambda s:[int(x) for x in re.findall('[0-9]+',s)[:3]];print(v,int(max(t(v),t(sys.argv[2]))==t(v)))" $p $KitNeed 2>$null)
+    if ($o.Count -gt 0 -and $o[0]) { return ([string]$o[0]).Split(' ', 2) }
+    return @('unknown', '0')
+  }
+  $ptr = Join-Path $KitHome 'kit.txt'; $active = $null; $have = 'none'; $run = $null; $where = $null
+  $rmZip = $null; $errf = $null; $vsrc = $null
+  if (Test-Path -LiteralPath $ptr) { try { $active = [string](Get-Content -LiteralPath $ptr -TotalCount 1 -ErrorAction Stop) } catch { $active = $null } }
+  if ($active) { $active = $active.Trim() }
+  if ($active -and (Test-Path -LiteralPath (Join-Path $KitHome "kits\$active\plugins\ml-seat-kit\scripts\seat_setup.py"))) { $kitDir = Join-Path $KitHome "kits\$active" }
+  $current = Join-Path $KitHome 'current'
+  if (-not $kitDir -and (Test-Path -LiteralPath (Join-Path $current 'plugins\ml-seat-kit\scripts\seat_setup.py'))) { $kitDir = $current }
+  if ($kitDir) { $kv, $kok = & $verOf $kitDir; $have = $kv }
+  if ($kok -eq '1') {
+    Write-Host 'using the one already on this PC'
+    $run = Join-Path $kitDir 'plugins\ml-seat-kit\scripts\seat_setup.py'; $where = $kitDir
+  } else {
+    $kv = $null; $kok = $null
+    $errf = Join-Path $env:TEMP "seat-kit-$tok.txt"
+    if ($KitSource -eq $Placeholder) { $whyKit = 'This launcher has no download address.' }
+    elseif ($KitSource -like 'https://*') {
+      $rmZip = Join-Path $env:TEMP "seat-kit-$tok.zip"
+      & $Curl -fsSL --retry 2 --retry-delay 1 --stderr $errf $KitSource -o $rmZip
+      if ($LASTEXITCODE -ne 0) { $whyKit = 'The download did not work.' } else { $run = $rmZip; $vsrc = $rmZip }
+    } elseif (Test-Path -LiteralPath (Join-Path $KitSource '.claude-plugin\marketplace.json')) {
+      $run = Join-Path $KitSource 'plugins\ml-seat-kit\scripts\seat_setup.py'; $vsrc = $KitSource
+    } elseif (-not (Test-Path -LiteralPath $KitSource)) { $whyKit = "The kit file $KitSource is not there." }
+    else { $run = $KitSource; $vsrc = $KitSource }
+    if ($vsrc) {
+      $kv, $kok = & $verOf $vsrc
+      if ($kok -ne '1') { $whyKit = "The kit that was fetched is $kv, and remove needs $KitNeed or newer." }
+    }
+    if ($whyKit) {
+      Write-Host 'not done'
+      Write-Host "   $whyKit"
+      if ($errf -and (Test-Path -LiteralPath $errf)) { Get-Content -LiteralPath $errf | ForEach-Object { Write-Host "   $_" } }
+      if ($rmZip) { Remove-Item -Force -ErrorAction SilentlyContinue -LiteralPath $rmZip }
+      if ($errf) { Remove-Item -Force -ErrorAction SilentlyContinue -LiteralPath $errf }
+      Write-Host ''
+      if ($have -eq 'none') { Write-Host "Stopped at step 3: could not get kit $KitNeed, which remove needs, and there is no kit on this PC, so nothing was changed." }
+      else { Write-Host "Stopped at step 3: could not get kit $KitNeed, which remove needs, and the kit on this PC ($have) has no remove, so nothing was changed." }
+      Write-Host 'What to do: check that you are online and run this again. Or take the first install back by hand, in this order:'
+      Write-Host "   1. Close your assistant's window."
+      Write-Host '   2. In a Command Prompt, run: claude plugin uninstall ml-seat-kit@seat-kit'
+      Write-Host '      and then: claude plugin marketplace remove seat-kit'
+      Write-Host "   3. Delete your assistant's shortcut from your desktop."
+      Write-Host "   4. Your assistant's folder in $Seats holds your notes: move it somewhere you keep your files, or delete it if you do not want them."
+      Write-Host "   5. Delete the folder $KitHome"
+      try { [void](Read-Host 'Press Enter to close') } catch { }
+      if ($PSCommandPath) { exit 1 }
+      return
+    }
+    Write-Host 'done'
+    $where = "fetched from $KitSource, not put in place"
+  }
+  Write-Host "Kit in use: $kv ($where)"
+  $rmArgs = @('-I', '-B', $run, 'remove', '--claude', $Claude, '--kit-home', $KitHome, '--seat-home', $Seats)
+  if ($env:SEAT_DESKTOP) { $rmArgs += @('--desktop', $env:SEAT_DESKTOP) }
+  if ($PSCommandPath) { $rmArgs += @('--launcher', $PSCommandPath) }
+  $rmArgs += @($args | Select-Object -Skip 1)
+  & $Py @rmArgs
+  $rc = $LASTEXITCODE
+  if ($rmZip) { Remove-Item -Force -ErrorAction SilentlyContinue -LiteralPath $rmZip }
+  if ($errf) { Remove-Item -Force -ErrorAction SilentlyContinue -LiteralPath $errf }
+  try { [void](Read-Host 'Press Enter to close') } catch { }
+  if ($PSCommandPath) { exit $rc }   # run as a file: its exit code; pasted into a window: keep the window open
+  return
+}
 $errf = Join-Path $KitHome "dl-$tok.txt"
 if ($KitSource -eq $Placeholder) { $whyKit = 'This launcher has no download address.' }
 elseif ($KitSource -like 'https://*') {

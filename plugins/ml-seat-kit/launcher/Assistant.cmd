@@ -10,16 +10,22 @@ rem   Assistant.cmd adopt "<your folder>"           (does it; add --name "<name>
 rem   Assistant.cmd adopt --undo "<your folder>"
 rem Self test mode only runs the kit's self tests and says what it found (installs nothing, sets nothing up):
 rem   Assistant.cmd selftest
+rem Remove mode takes back a first install (never an adopted folder). Run it from the copy you downloaded:
+rem   Assistant.cmd remove --check   (shows what it would take away and what it would leave; changes nothing)
+rem   Assistant.cmd remove           (does it; your assistant's folder is moved aside, not deleted, unless you add
+rem                                   --delete-my-notes and type its name)
 set "ADOPT="
 set "SELFTEST="
+set "REMOVE="
 set "NOINST="
 set "MODE="
 if /i "%~1"=="adopt" set "ADOPT=1" & set "NOINST=adopt"
 if /i "%~1"=="selftest" set "SELFTEST=1" & set "NOINST=selftest" & set "MODE=selftest"
+if /i "%~1"=="remove" set "REMOVE=1" & set "NOINST=remove" & set "MODE=remove"
 if defined ADOPT for %%a in (%*) do if /i "%%~a"=="--check" set "MODE=check"
 if defined ADOPT for %%a in (%*) do if /i "%%~a"=="--undo" set "MODE=undo"
 set "KIT_SOURCE=PUT-KIT-ZIP-ADDRESS-HERE"
-set "KIT_NEED=0.1.4"
+set "KIT_NEED=0.1.5"
 if defined SEAT_KIT_SOURCE set "KIT_SOURCE=%SEAT_KIT_SOURCE%"
 set "KIT_HOME=%LOCALAPPDATA%\seat-kit"
 if defined SEAT_KIT_HOME set "KIT_HOME=%SEAT_KIT_HOME%"
@@ -32,7 +38,7 @@ set "SYS=%SystemRoot%\System32"
 set "WINGET=winget"
 set "PYGET=winget install --id Python.Python.3.12 --exact --scope user --silent --accept-package-agreements --accept-source-agreements"
 set "ASKIT=ask IT to install Python 3.12 for your user from python.org, then double-click this file again."
-if not exist "%KIT_HOME%" mkdir "%KIT_HOME%"
+if not defined REMOVE if not exist "%KIT_HOME%" mkdir "%KIT_HOME%"
 <nul set /p "=Step 1 of 6: checking for Claude Code ... "
 if not "%SIM:,claude,=%"=="%SIM%" echo missing [simulated], would run: curl -fsSL https://claude.ai/install.cmd -o "%KIT_HOME%\install-claude.cmd" then run it& goto step2
 call :findclaude
@@ -68,6 +74,7 @@ rem Self test and adopt never run a kit older than KIT_NEED, and never an older 
 <nul set /p "=Step 3 of 6: getting the assistant kit ... "
 set "RC3=" & set "WHYKIT=" & set "KITDIR=" & set "KV=" & set "KOK="
 set "TOK=%RANDOM%%RANDOM%"
+if defined REMOVE goto kitremove
 set "ERRF=%KIT_HOME%\dl-%TOK%.txt"
 if "%KIT_SOURCE:~0,12%"=="PUT-KIT-ZIP-" set "WHYKIT=This launcher has no download address." & goto kitnot
 if exist "%KIT_SOURCE%\.claude-plugin\marketplace.json" goto kitfolder
@@ -148,6 +155,65 @@ rem Read only: runs the kit's self tests and prints what it found. No plugin cal
 set "RC=%errorlevel%"
 pause
 exit /b %RC%
+:kitremove
+rem Remove never writes into the kit folder. It runs the kit already there when that is KIT_NEED or newer, and
+rem otherwise the newest kit straight from the download, never put in place (the download is deleted after).
+set "ACTIVE=" & set "HAVE=none" & set "RUN=" & set "RMZIP=" & set "ERRF=" & set "VSRC="
+if exist "%KIT_HOME%\kit.txt" set /p ACTIVE=<"%KIT_HOME%\kit.txt"
+if defined ACTIVE if exist "%KIT_HOME%\kits\%ACTIVE%\plugins\ml-seat-kit\scripts\seat_setup.py" set "KITDIR=%KIT_HOME%\kits\%ACTIVE%"
+if not defined KITDIR if exist "%KIT_HOME%\current\plugins\ml-seat-kit\scripts\seat_setup.py" set "KITDIR=%KIT_HOME%\current"
+if defined KITDIR call :kitver "%KITDIR%"
+if defined KITDIR set "HAVE=%KV%"
+if "%KOK%"=="1" echo using the one already on this PC& set "RUN=%KITDIR%\plugins\ml-seat-kit\scripts\seat_setup.py" & set "WHERE=%KITDIR%" & goto rmrun
+set "ERRF=%TEMP%\seat-kit-%TOK%.txt"
+if "%KIT_SOURCE:~0,12%"=="PUT-KIT-ZIP-" set "WHYKIT=This launcher has no download address." & goto rmold
+if exist "%KIT_SOURCE%\.claude-plugin\marketplace.json" set "RUN=%KIT_SOURCE%\plugins\ml-seat-kit\scripts\seat_setup.py" & set "VSRC=%KIT_SOURCE%" & goto rmver
+if /i not "%KIT_SOURCE:~0,8%"=="https://" goto rmfile
+set "RMZIP=%TEMP%\seat-kit-%TOK%.zip"
+"%SYS%\curl.exe" -fsSL --retry 2 --retry-delay 1 --stderr "%ERRF%" "%KIT_SOURCE%" -o "%RMZIP%" || set "WHYKIT=The download did not work."
+if defined WHYKIT goto rmold
+set "RUN=%RMZIP%" & set "VSRC=%RMZIP%" & goto rmver
+:rmfile
+if not exist "%KIT_SOURCE%" set "WHYKIT=The kit file %KIT_SOURCE% is not there." & goto rmold
+set "RUN=%KIT_SOURCE%" & set "VSRC=%KIT_SOURCE%"
+:rmver
+call :kitver "%VSRC%"
+if not "%KOK%"=="1" set "WHYKIT=The kit that was fetched is %KV%, and remove needs %KIT_NEED% or newer." & goto rmold
+echo done
+set "WHERE=fetched from %KIT_SOURCE%, not put in place"
+:rmrun
+echo Kit in use: %KV% (%WHERE%)
+"%PY%" -I -B "%RUN%" remove --claude "%CLAUDE%" --kit-home "%KIT_HOME%" --seat-home "%SEATS%" --desktop "%SEAT_DESKTOP%" --launcher "%~f0" %2 %3 %4 %5 %6 %7 %8 %9
+set "RC=%errorlevel%"
+if defined RMZIP del /q "%RMZIP%" 2>nul
+if defined ERRF del /q "%ERRF%" 2>nul
+pause
+exit /b %RC%
+:rmold
+echo not done
+if defined WHYKIT echo    %WHYKIT%
+if defined ERRF if exist "%ERRF%" for /f "usebackq delims=" %%l in ("%ERRF%") do echo    %%l
+if defined RMZIP del /q "%RMZIP%" 2>nul
+if defined ERRF del /q "%ERRF%" 2>nul
+set "LINE=Stopped at step 3: could not get kit %KIT_NEED%, which remove needs, and there is no kit on this PC, so nothing was changed."
+if not "%HAVE%"=="none" set "LINE=Stopped at step 3: could not get kit %KIT_NEED%, which remove needs, and the kit on this PC (%HAVE%) has no remove, so nothing was changed."
+echo.
+echo %LINE%
+echo What to do: check that you are online and run this again. Or take the first install back by hand, in this order:
+echo    1. Close your assistant's window.
+echo    2. In a Command Prompt, run: claude plugin uninstall ml-seat-kit@seat-kit
+echo       and then: claude plugin marketplace remove seat-kit
+echo    3. Delete your assistant's shortcut from your desktop.
+echo    4. Your assistant's folder in %SEATS% holds your notes: move it somewhere you keep your files, or delete it if you do not want them.
+echo    5. Delete the folder %KIT_HOME%
+pause
+exit /b 1
+:kitver
+rem The version of a kit folder or kit zip, and whether it is KIT_NEED or newer. Reads only.
+set "KV=" & set "KOK="
+for /f "usebackq tokens=1,2" %%a in (`call "%PY%" -I -c "import json,re,sys,zipfile;p=sys.argv[1];m='plugins/ml-seat-kit/.claude-plugin/plugin.json';v=json.loads(zipfile.ZipFile(p).read(m) if zipfile.is_zipfile(p) else open(p+'/'+m,'rb').read())['version'];t=lambda s:[int(x) for x in re.findall('[0-9]+',s)[:3]];print(v,int(max(t(v),t(sys.argv[2]))==t(v)))" "%~1" %KIT_NEED% 2^>nul`) do set "KV=%%a" & set "KOK=%%b"
+if not defined KV set "KV=unknown"
+exit /b 0
 :nopy
 echo no Python this kit can use
 set "SEEN="

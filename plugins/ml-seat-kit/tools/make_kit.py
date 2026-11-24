@@ -6,7 +6,8 @@ Zip layout (the launcher runs the zip itself, `python -I <zip> --kit-home <folde
 %LOCALAPPDATA%\\seat-kit\\kits\\<version> and switches kit.txt to it; see scripts/kit_place.py. That folder is then
 registered as a local folder marketplace named "seat-kit"):
 
-    __main__.py                         runs plugins/ml-seat-kit/scripts/kit_place.py from inside the zip
+    __main__.py                         runs plugins/ml-seat-kit/scripts/kit_place.py from inside the zip, or with
+                                        "remove" first, seat_setup.py remove (the kit is then not put in place)
     .claude-plugin/marketplace.json     lists the one plugin, ml-seat-kit, at ./plugins/ml-seat-kit
     plugins/ml-seat-kit/...             the plugin folder, verbatim (no caches)
     Assistant.cmd, Assistant.ps1        the launchers, with KIT_SOURCE filled in when --source is given
@@ -27,11 +28,15 @@ SKIP_DIRS = {"__pycache__", ".pytest_cache"}
 SKIP_SUFFIX = (".pyc", ".pyo", ".tmp")
 SKIP_NAMES = {"private_words.txt"}   # the private deny list (tests/test_privacy.py): never in a zip
 PLACEHOLDER = b"PUT-KIT-ZIP-ADDRESS-HERE"
-ZIP_MAIN = b'''"""Run by the assistant launcher: python -I <this zip> --kit-home <folder>. Puts this kit in place."""
+ZIP_MAIN = b'''"""Run by the assistant launcher: python -I <this zip> --kit-home <folder> puts this kit in place.
+python -I <this zip> remove ... runs remove straight from the zip and never puts the kit in place (0.1.5)."""
 import os
 import sys
 
 sys.path.insert(0, os.path.join(sys.argv[0], "plugins", "ml-seat-kit", "scripts"))
+if sys.argv[1:2] == ["remove"]:
+    import seat_setup  # noqa: E402
+    raise SystemExit(seat_setup.main(sys.argv[1:]))
 import kit_place  # noqa: E402
 
 raise SystemExit(kit_place.main(sys.argv[1:] + ["--zip", os.path.abspath(sys.argv[0])]))

@@ -37,6 +37,11 @@ Self test mode only runs the kit's self tests and says what it found; it changes
 
 Every self test run keeps unittest's full output in <kit-home>\\selftest-last.txt (overwritten each run), and a
 failure names the tests that did not pass and that file.
+
+Remove mode takes back a first install (never an adopted folder); see seat_remove.py:
+
+    python -I seat_setup.py remove [--check] [--delete-my-notes] --claude <claude.exe> --kit-home <folder>
+                                   [--seat-home <folder>] [--desktop <folder>] [--launcher <file>]
 """
 import argparse
 import codecs
@@ -281,12 +286,15 @@ def clean_name(s):
     return re.sub(r"\s+", " ", s)[:40]
 
 
+REMOVED_NAME = re.compile(r"\.removed-\d{8}-\d{6}(-\d+)?$", re.I)   # a folder remove moved aside: never a seat again
+
+
 def find_seats(seat_home):
     home = pathlib.Path(seat_home)
     out = []
     try:
         for d in sorted(home.iterdir()):
-            if d.is_dir() and (d / seat_common.MARKER).is_file():
+            if d.is_dir() and not REMOVED_NAME.search(d.name) and (d / seat_common.MARKER).is_file():
                 out.append(d)
     except OSError:
         pass
@@ -1167,6 +1175,7 @@ def adopt(args):
                       "NOT adopted", "do not use it as an adopted assistant; run %s and send this line to whoever set "
                                      "up your assistant" % _launcher_line(args.launcher, "adopt", "--undo", '"%s"' % folder))
     say("   Checked: the send gate and all %d deny rules are in .claude\\settings.json" % len(DENY))
+    record_adopted(args.kit_home, folder)
     if not args.no_plugin:
         try:
             ensure_plugin(args.claude, args.kit_home, step=6)
@@ -1179,6 +1188,25 @@ def adopt(args):
     say("Your folder is adopted. No session was opened.")
     how_to_start(folder, args)
     return folder
+
+
+ADOPTED_LIST = "adopted.txt"
+
+
+def record_adopted(kit_home, folder):
+    """Remember an adopted folder in <kit home>\\adopted.txt (one folder a line, since kit 0.1.5), so remove knows the
+    kit's send gate file is in use there and leaves it. Best effort: an adopt never fails over this record."""
+    path = pathlib.Path(kit_home) / ADOPTED_LIST
+    try:
+        lines = [ln.strip() for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    except (OSError, UnicodeDecodeError):
+        lines = []
+    if any(_same(ln, folder) for ln in lines):
+        return
+    try:
+        kit_place.write_file(path, ("\n".join(lines + [str(folder)]) + "\n").encode("utf-8"))
+    except OSError:
+        pass
 
 
 def _open_backups(folder):
@@ -1372,6 +1400,9 @@ def main(argv=None):
         return adopt_main(argv[1:])
     if argv and argv[0] == "selftest":
         return selftest_main(argv[1:])
+    if argv and argv[0] == "remove":
+        import seat_remove   # imported before anything is taken away; it never imports later
+        return seat_remove.main(argv[1:])
     ap = argparse.ArgumentParser(prog="seat_setup.py")
     ap.add_argument("--claude", required=True)
     ap.add_argument("--kit-home", required=True)

@@ -40,6 +40,63 @@ the same way as before. The send gate applies however the session is started, be
 `.claude\settings.json` with the full path of Python. Adopt needs a Python from python.org: if the only one found
 is the Microsoft Store one, or none, it stops and installs nothing.
 
+## Taking it back
+
+A first install (the launcher made the assistant's folder, the shortcut and the kit folder) is taken back with
+remove. First see exactly what it would take away and what it would leave (this changes nothing at all: no folder,
+no file, no shortcut, no call to Claude Code), then do it, from the copy of `Assistant.cmd` that was downloaded:
+
+```
+"%USERPROFILE%\Downloads\Assistant.cmd" remove --check
+"%USERPROFILE%\Downloads\Assistant.cmd" remove
+```
+
+In this order, each on a plain line saying done, not there, or could not (with what Windows said):
+
+1. The plugin: `claude plugin uninstall ml-seat-kit@seat-kit`, then `claude plugin marketplace remove seat-kit`.
+   When Claude Code is not found, it says so, prints those two lines for later, and carries on.
+2. The desktop shortcut the kit made, recognized by its target (the kit's own `Assistant.cmd` in the kit folder),
+   never by its name. A shortcut that now points anywhere else is left and named.
+3. The assistant's folder under `%USERPROFILE%\Assistant`. The person's notes are in it, so it is MOVED beside
+   itself to `<name>.removed-<yyyymmdd-hhmmss>`, never deleted; deleting it later is theirs to do. With
+   `--delete-my-notes` it is deleted instead, after the person types the folder's name (a wrong name changes
+   nothing; never with `--check`). A folder moved aside this way is never picked up as an assistant again.
+4. The kit folder `%LOCALAPPDATA%\seat-kit`: the kit's own files and folders in it, then the folder itself. A
+   file there that is not the kit's (anything but its known names, or an `Assistant.cmd` that is not a kit
+   launcher) is left, and so is the folder, and both are named.
+
+Everything is checked before anything changes, and remove stops with nothing changed when: a file in the
+assistant's folder or the kit folder is open, or a window sits in one of them (a running assistant: close its
+window); the launcher running is the copy kept in the kit folder (a running file cannot take away its own folder:
+run the downloaded copy, or copy that one out to `%TEMP%` and run the copy; the stop line prints both lines); the
+assistant's folder holds a file named `assistant.cmd` or `assistant.ps1`; Claude Code does not answer when asked
+what it has; or the kit folder or the assistants' folder it was given is a drive root, the user folder, the
+Desktop or Documents folder itself, Downloads or anything in it, the Windows folder, or a kit folder with no kit in
+it. A step that fails after others ran stops there, says what was already taken back and what is still there, and
+running remove again finishes the job ("not there" is a normal line). Exit code 0 when done or nothing was there,
+1 on a stop.
+
+Remove never touches an adopted folder, Claude Code itself, Python, the person's Claude sign-in and connectors, or
+anything in Downloads. A folder named on the remove line is refused (an adopted one with a pointer to
+`adopt --undo`). Adopted folders are found under `%USERPROFILE%\Assistant` and in `<kit home>\adopted.txt`, which
+adopt writes since 0.1.5. While one exists, remove takes only the first install's own things (its folder, its
+shortcut, the kit's copy of `Assistant.cmd` and `last-seat.txt`) and keeps the plugin and the rest of the kit
+folder, because that folder's send gate runs `<kit home>\send_gate.py`; it says so on a line naming the folder.
+A folder adopted with 0.1.4 or older outside `%USERPROFILE%\Assistant` is not known to the kit: `remove --check`
+says to take it back first with `adopt --undo`. If the kit folder goes anyway, that folder's gate fails closed
+(every gated tool is refused).
+
+An adopted folder is taken back with adopt's own undo (see above):
+
+```
+"%USERPROFILE%\Downloads\Assistant.cmd" adopt --undo "C:\Example Folder"
+```
+
+Remove never writes into the kit folder. It runs the kit already there when that is 0.1.5 or newer; otherwise it
+downloads the newest kit to `%TEMP%` and runs it straight from the zip (`python -I -B <zip> remove ...`), never
+putting it in place, and deletes the download after. If it cannot get kit 0.1.5 and the kit on the PC is older
+(which has no remove), it stops with one line and prints the five steps to do by hand, exit code 1.
+
 ## Self test only
 
 To see whether the kit works on a PC without setting anything up, run:
@@ -73,6 +130,7 @@ step 1's Claude Code path as Windows gave it to them (cmd has no simple way to e
 | `launcher/Assistant.cmd` | The one file the person gets. Six steps, each one plain line: Claude Code, Python, the kit, the plugin, the seat folder, open. Running it again is how they start each day. Step 1 uses a Claude Code that is already there (the native `%USERPROFILE%\.local\bin\claude.exe`, then npm's `%APPDATA%\npm\claude.cmd`, then `where claude`) and downloads one only when none is found. |
 | `launcher/Assistant.ps1` | The same six steps and lines, for pasting into PowerShell when a downloaded `.cmd` is blocked. |
 | `scripts/seat_setup.py` | Steps 4 and 5: registers the kit folder as a local marketplace, installs or updates the plugin, makes or checks the seat folder, asks three optional questions on the first run, runs the self tests (once per kit version) and a dry loop check, makes one desktop shortcut. Also adopt mode (`adopt`, `adopt --check`, `adopt --undo`) for a folder the person already has. |
+| `scripts/seat_remove.py` | Remove mode (`remove`, `remove --check`, `--delete-my-notes`), run through `seat_setup.py remove`: takes back a first install, never an adopted folder. |
 | `scripts/kit_place.py` | Step 3 since 0.1.4, run from inside the downloaded zip: puts the kit into `kits\<version>` and switches `kit.txt`, then removes older folders best effort. Never renames or deletes anything in use. |
 | `scripts/gate_shim.py` | Copied to `<kit home>\send_gate.py`, the gate's fixed address: runs the gate of the kit in `kit.txt`, refuses (exit 2) when it cannot. |
 | `scripts/send_gate.py` | The send gate. A PreToolUse hook on every MCP tool named with send, reply, forward, respond or RSVP. Inside a seat folder it denies (exit 2, plain reason); outside one it does nothing. Fails closed inside a seat. Since 0.1.1 it is wired in the seat's `.claude/settings.json` (by `seat_setup.py`), not in `hooks/hooks.json` (now empty): exec form with the absolute Python the launcher found, so it runs in a session started without the launcher, and `onFailure: "block"` (Claude Code 2.1.295 or later) so a vanished Python blocks the call. |
@@ -103,6 +161,8 @@ step 1's Claude Code path as Windows gave it to them (cmd has no simple way to e
     has its send gate there, and it keeps working. A normal start with no newer kit and no `kit.txt` runs it.
   - `python.txt` (the interpreter the launcher found), `last-seat.txt`, `selftest-last.txt` (the last self test
     output) and a copy of the launcher.
+  - `adopted.txt` (since 0.1.5): each folder adopt put the kit onto, one a line, so remove leaves the send gate
+    they use.
 - Seat: `%USERPROFILE%\Assistant\<assistant name>`: `.seat/seat.json` (the marker; names, backup folder, label
   ids), `state/`, `CLAUDE.md`, `.claude/settings.json` (the send gate hook, plus permission DENY rules for the known
   send tools as a second layer behind it; never an allow rule).
@@ -132,8 +192,9 @@ Since 0.1.4 step 3 renames, overwrites and deletes nothing that may be in use, a
 4. When it cannot finish, step 3 prints "not done" and then, each on a line of its own, what could not be done,
    what Windows (or curl) said, and the kit folder.
 
-Each launcher names the oldest kit it runs for self test and adopt (`KIT_NEED` in the `.cmd`, `$KitNeed` in the
-`.ps1`: the kit's own version; `make_kit.py` refuses a zip where they differ). Every mode prints
+Each launcher names the oldest kit it runs for self test, adopt and remove (`KIT_NEED` in the `.cmd`, `$KitNeed`
+in the `.ps1`: the kit's own version, 0.1.5 for all three since 0.1.5; `make_kit.py` refuses a zip where they
+differ). Every mode prints
 `Kit in use: <version> (<folder>)`, read from the kit it is about to run, before running it. Self test and adopt
 run only a kit just put in place and at least that version; otherwise they stop with one line, naming the kit
 already on the PC, exit code 1, and run nothing. A normal start with no newer kit uses the kit it has (being
